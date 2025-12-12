@@ -4,8 +4,8 @@ pragma solidity ^0.8.23;
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 
 /**
  * @title ProvenanceHub
@@ -16,8 +16,7 @@ import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 contract ProvenanceHub is
     UUPSUpgradeable,
     AccessControlUpgradeable,
-    PausableUpgradeable,
-    ReentrancyGuardUpgradeable
+    PausableUpgradeable
 {
     using MerkleProof for bytes32[];
 
@@ -37,6 +36,13 @@ contract ProvenanceHub is
 
     /// @notice Arweave transaction ID length (43 characters base64url encoded)
     uint256 private constant ARWEAVE_TX_ID_LENGTH = 43;
+
+    // ============ Reentrancy Guard ============
+    
+    /// @notice Reentrancy guard status
+    uint256 private constant _NOT_ENTERED = 1;
+    uint256 private constant _ENTERED = 2;
+    uint256 private _status;
 
     // ============ Storage ============
 
@@ -126,15 +132,21 @@ contract ProvenanceHub is
             revert ZeroAddress();
         }
 
-        __UUPSUpgradeable_init();
         __AccessControl_init();
         __Pausable_init();
-        __ReentrancyGuard_init();
+        _status = _NOT_ENTERED;
 
         // Grant admin role to deployer
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
 
-        // Set initial batch size limits
+        // Validate and set initial batch size limits
+        if (initialMinBatchSize == 0 || initialMaxBatchSize == 0) {
+            revert InvalidBatchSize(initialMinBatchSize, initialMinBatchSize, initialMaxBatchSize);
+        }
+        if (initialMinBatchSize > initialMaxBatchSize) {
+            revert InvalidBatchSize(initialMinBatchSize, initialMinBatchSize, initialMaxBatchSize);
+        }
+
         minBatchSize = initialMinBatchSize;
         maxBatchSize = initialMaxBatchSize;
 
@@ -156,9 +168,11 @@ contract ProvenanceHub is
         external
         onlyRole(BATCH_COMMITTER_ROLE)
         whenNotPaused
-        nonReentrant
         validArweaveTxId(arweaveTxId)
     {
+        // Reentrancy guard
+        require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
+        _status = _ENTERED;
         // Validate batch size
         if (eventCount < minBatchSize || eventCount > maxBatchSize) {
             revert InvalidBatchSize(eventCount, minBatchSize, maxBatchSize);
@@ -203,6 +217,9 @@ contract ProvenanceHub is
             block.timestamp,
             msg.sender
         );
+
+        // Reset reentrancy guard
+        _status = _NOT_ENTERED;
     }
 
     // ============ Proof Verification ============
@@ -212,11 +229,12 @@ contract ProvenanceHub is
     /// @param leafHash Hash of the event (leaf in Merkle tree)
     /// @param proof Merkle proof path from leaf to root
     /// @return true if proof is valid, false otherwise
+    /// @dev This function emits an event, so it's not view
     function verifyProof(
         uint256 batchId,
         bytes32 leafHash,
         bytes32[] memory proof
-    ) external view whenNotPaused returns (bool) {
+    ) external whenNotPaused returns (bool) {
         if (batchId >= batchCount) {
             revert BatchNotFound(batchId);
         }
@@ -341,7 +359,7 @@ contract ProvenanceHub is
     /// @notice Returns the current implementation address
     /// @return Address of the implementation contract
     function getImplementation() external view returns (address) {
-        return _getImplementation();
+        return ERC1967Utils.getImplementation();
     }
 
     /// @notice Returns contract version (for upgrade tracking)

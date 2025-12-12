@@ -2,9 +2,32 @@ const hre = require("hardhat");
 const { upgrades } = require("hardhat");
 
 async function main() {
-    const [deployer] = await hre.ethers.getSigners();
+    const signers = await hre.ethers.getSigners();
+    
+    if (signers.length === 0) {
+        throw new Error(
+            "No signers found. Please:\n" +
+            "1. Set PRIVATE_KEY in your .env file, or\n" +
+            "2. Use --network hardhat for local testing"
+        );
+    }
+    
+    const deployer = signers[0];
+    const networkName = hre.network.name;
+    const chainId = (await hre.ethers.provider.getNetwork()).chainId;
+    
+    console.log("\n=== Deployment Configuration ===");
+    console.log("Network:", networkName);
+    console.log("Chain ID:", chainId.toString());
     console.log("Deploying contracts with account:", deployer.address);
-    console.log("Account balance:", (await deployer.provider.getBalance(deployer.address)).toString());
+    
+    const balance = await deployer.provider.getBalance(deployer.address);
+    console.log("Account balance:", hre.ethers.formatEther(balance), "ETH");
+    
+    if (balance === 0n && networkName !== "hardhat") {
+        console.warn("⚠️  Warning: Account has zero balance. Deployment may fail.");
+        console.warn("   Please fund your account before deploying to a live network.");
+    }
 
     // Configuration
     const MIN_BATCH_SIZE = 100;

@@ -1,5 +1,6 @@
 require("@nomicfoundation/hardhat-toolbox");
 require("@nomicfoundation/hardhat-verify");
+require("@openzeppelin/hardhat-upgrades");
 require("hardhat-gas-reporter");
 require("solidity-coverage");
 require("dotenv").config();
@@ -20,6 +21,10 @@ module.exports = {
   networks: {
     hardhat: {
       chainId: 1337,
+      accounts: {
+        mnemonic: "test test test test test test test test test test test junk",
+        count: 20,
+      },
     },
     liskSepolia: {
       url: process.env.LISK_SEPOLIA_RPC_URL || "https://rpc.sepolia-api.lisk.com",

@@ -1,5 +1,7 @@
 # Dependencies
 node_modules/
+
+# Foundry dependencies (git submodules)
 lib/
 
 # Build artifacts
