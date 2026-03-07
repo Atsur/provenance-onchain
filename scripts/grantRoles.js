@@ -1,52 +1,75 @@
+/**
+ * grantRoles.js — Grant roles on AtsurActorRegistry and AtsurProvenance
+ *
+ * Usage:
+ *   npx hardhat run scripts/grantRoles.js --network liskSepolia
+ *
+ * Required .env:
+ *   REGISTRY_ADDRESS       AtsurActorRegistry proxy
+ *   PROVENANCE_ADDRESS     AtsurProvenance proxy
+ *   OPERATOR_ADDRESS       Receives OPERATOR_ROLE (registry) and BATCH_COMMITTER_ROLE (provenance)
+ *   PAUSER_ADDRESS         Receives PAUSER_ROLE on provenance (optional, defaults to operator)
+ */
+
 const hre = require("hardhat");
+require("dotenv").config();
 
 async function main() {
     const [deployer] = await hre.ethers.getSigners();
-    
-    // Get contract address from environment or command line
-    const hubAddress = process.env.HUB_ADDRESS || process.argv[2];
-    if (!hubAddress) {
-        throw new Error("Please provide HUB_ADDRESS environment variable or as first argument");
-    }
 
-    const hub = await hre.ethers.getContractAt("ProvenanceHub", hubAddress);
+    const registryAddress  = process.env.REGISTRY_ADDRESS;
+    const provenanceAddress = process.env.PROVENANCE_ADDRESS;
+    const operator          = process.env.OPERATOR_ADDRESS;
+    const pauser            = process.env.PAUSER_ADDRESS || operator;
 
-    // Get role addresses from environment
-    const batchCommitter = process.env.BATCH_COMMITTER_ADDRESS;
-    const pauser = process.env.PAUSER_ADDRESS;
+    if (!registryAddress)  throw new Error("REGISTRY_ADDRESS not set");
+    if (!provenanceAddress) throw new Error("PROVENANCE_ADDRESS not set");
+    if (!operator)          throw new Error("OPERATOR_ADDRESS not set");
 
-    console.log("Granting roles on:", hubAddress);
-    console.log("Deployer:", deployer.address);
+    console.log("=== Grant Roles ===");
+    console.log("Deployer:  ", deployer.address);
+    console.log("Registry:  ", registryAddress);
+    console.log("Provenance:", provenanceAddress);
+    console.log("Operator:  ", operator);
+    console.log("Pauser:    ", pauser);
+    console.log("");
 
-    if (batchCommitter) {
-        console.log("\nGranting BATCH_COMMITTER_ROLE to:", batchCommitter);
-        const tx1 = await hub.grantRole(await hub.BATCH_COMMITTER_ROLE(), batchCommitter);
-        await tx1.wait();
-        console.log("✓ BATCH_COMMITTER_ROLE granted");
-    }
+    const registry  = await hre.ethers.getContractAt("AtsurActorRegistry", registryAddress);
+    const provenance = await hre.ethers.getContractAt("AtsurProvenance", provenanceAddress);
 
-    if (pauser) {
-        console.log("\nGranting PAUSER_ROLE to:", pauser);
-        const tx2 = await hub.grantRole(await hub.PAUSER_ROLE(), pauser);
-        await tx2.wait();
-        console.log("✓ PAUSER_ROLE granted");
-    }
+    // Registry roles
+    const OPERATOR_ROLE = await registry.OPERATOR_ROLE();
+    console.log("Granting OPERATOR_ROLE on registry...");
+    let tx = await registry.grantRole(OPERATOR_ROLE, operator);
+    await tx.wait();
+    console.log("  ✓ OPERATOR_ROLE -> operator");
 
-    console.log("\n=== Role Summary ===");
-    if (batchCommitter) {
-        const hasCommitterRole = await hub.hasRole(await hub.BATCH_COMMITTER_ROLE(), batchCommitter);
-        console.log("BATCH_COMMITTER_ROLE:", hasCommitterRole ? "✓" : "✗");
-    }
-    if (pauser) {
-        const hasPauserRole = await hub.hasRole(await hub.PAUSER_ROLE(), pauser);
-        console.log("PAUSER_ROLE:", hasPauserRole ? "✓" : "✗");
-    }
+    // Provenance roles
+    const BATCH_COMMITTER_ROLE = await provenance.BATCH_COMMITTER_ROLE();
+    const PAUSER_ROLE          = await provenance.PAUSER_ROLE();
+
+    console.log("Granting BATCH_COMMITTER_ROLE on provenance...");
+    tx = await provenance.grantRole(BATCH_COMMITTER_ROLE, operator);
+    await tx.wait();
+    console.log("  ✓ BATCH_COMMITTER_ROLE -> operator");
+
+    console.log("Granting PAUSER_ROLE on provenance...");
+    tx = await provenance.grantRole(PAUSER_ROLE, pauser);
+    await tx.wait();
+    console.log("  ✓ PAUSER_ROLE -> pauser");
+
+    // Verify
+    console.log("\n=== Role Verification ===");
+    const checks = await Promise.all([
+        registry.hasRole(OPERATOR_ROLE, operator),
+        provenance.hasRole(BATCH_COMMITTER_ROLE, operator),
+        provenance.hasRole(PAUSER_ROLE, pauser),
+    ]);
+    console.log("Registry   OPERATOR_ROLE:        ", checks[0] ? "✓" : "✗");
+    console.log("Provenance BATCH_COMMITTER_ROLE: ", checks[1] ? "✓" : "✗");
+    console.log("Provenance PAUSER_ROLE:          ", checks[2] ? "✓" : "✗");
 }
 
 main()
     .then(() => process.exit(0))
-    .catch((error) => {
-        console.error(error);
-        process.exit(1);
-    });
-
+    .catch((err) => { console.error(err); process.exit(1); });
