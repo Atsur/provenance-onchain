@@ -31,6 +31,13 @@ contract ProvenanceHubTest is Test {
 
     event BatchSizeLimitsUpdated(uint256 minBatchSize, uint256 maxBatchSize);
 
+    event BatchAnchored(
+        uint256 indexed batchIndex,
+        bytes32 merkleRoot,
+        bytes32 arweaveTxId,
+        uint256 eventCount
+    );
+
     function setUp() public {
         // Deploy implementation
         implementation = new ProvenanceHub();
@@ -146,7 +153,7 @@ contract ProvenanceHubTest is Test {
 
     // ============ Initialization Tests ============
 
-    function test_Initialization() public {
+    function test_Initialization() public view {
         assertEq(hub.minBatchSize(), MIN_BATCH_SIZE);
         assertEq(hub.maxBatchSize(), MAX_BATCH_SIZE);
         assertTrue(hub.hasRole(hub.DEFAULT_ADMIN_ROLE(), admin));
@@ -193,7 +200,7 @@ contract ProvenanceHubTest is Test {
         hub.commitBatch(merkleRoot, arweaveTxId, eventCount);
 
         assertEq(hub.batchCount(), 1);
-        (bytes32 root, bytes32 txId, uint256 timestamp, uint256 count, uint256 blockNum) = _getBatch(0);
+        (bytes32 root, bytes32 txId, , uint256 count, , ) = _getBatch(0);
         assertEq(root, merkleRoot);
         assertEq(txId, arweaveTxId);
         assertEq(count, eventCount);
@@ -286,6 +293,24 @@ contract ProvenanceHubTest is Test {
         assertEq(hub.batchCount(), 10);
     }
 
+    function test_AnchorBatch_Success() public {
+        bytes32 merkleRoot = keccak256("anchor root");
+        bytes32 arweaveTxId = generateValidArweaveTxId();
+        string memory eventType = "E8_Acquisition";
+        vm.prank(committer);
+        vm.expectEmit(true, true, true, true);
+        emit BatchAnchored(0, merkleRoot, arweaveTxId, 500);
+        hub.anchorBatch(merkleRoot, arweaveTxId, 500, eventType);
+        assertEq(hub.batchCount(), 1);
+        assertEq(hub.getBatch(0).eventType, eventType);
+    }
+
+    function test_AnchorBatch_EmptyEventType() public {
+        vm.prank(committer);
+        vm.expectRevert(ProvenanceHub.EmptyEventType.selector);
+        hub.anchorBatch(keccak256("r"), generateValidArweaveTxId(), 500, "");
+    }
+
     // ============ Proof Verification Tests ============
 
     function test_VerifyProof_Success() public {
@@ -374,6 +399,53 @@ contract ProvenanceHubTest is Test {
         hub.verifyProofView(999, keccak256("leaf"), proof);
     }
 
+    function test_VerifyProvenanceEvent_Success() public {
+        vm.startPrank(admin);
+        hub.setBatchSizeLimits(4, 1000);
+        vm.stopPrank();
+        string[] memory events = new string[](4);
+        events[0] = "event0";
+        events[1] = "event1";
+        events[2] = "event2";
+        events[3] = "event3";
+        (bytes32 root, bytes32[] memory leaves, bytes32[][] memory proofs) = generateMerkleTreeFFI(events);
+        bytes32 arweaveTxId = generateValidArweaveTxId();
+        vm.prank(committer);
+        hub.anchorBatch(root, arweaveTxId, 4, "E12_Production");
+        assertTrue(hub.verifyProvenanceEvent(0, leaves[0], proofs[0]));
+        assertTrue(hub.verifyProvenanceEvent(0, leaves[3], proofs[3]));
+        vm.prank(admin);
+        hub.setBatchSizeLimits(MIN_BATCH_SIZE, MAX_BATCH_SIZE);
+    }
+
+    function test_VerifyProvenanceEvent_InvalidProof() public {
+        bytes32 arweaveTxId = generateValidArweaveTxId();
+        vm.prank(committer);
+        hub.commitBatch(keccak256("root"), arweaveTxId, 100);
+        bytes32[] memory badProof = new bytes32[](1);
+        badProof[0] = keccak256("wrong");
+        assertFalse(hub.verifyProvenanceEvent(0, keccak256("wrong leaf"), badProof));
+    }
+
+    function test_VerifyProvenanceEvent_BatchNotFound() public {
+        bytes32[] memory proof = new bytes32[](0);
+        vm.expectRevert(abi.encodeWithSelector(ProvenanceHub.BatchNotFound.selector, 999));
+        hub.verifyProvenanceEvent(999, keccak256("leaf"), proof);
+    }
+
+    function test_CheckAuthorship_Match() public view {
+        bytes32 c = keccak256("commitment");
+        assertTrue(hub.checkAuthorship(keccak256("id"), c, c));
+    }
+
+    function test_CheckAuthorship_NoMatch() public view {
+        assertFalse(hub.checkAuthorship(keccak256("id"), keccak256("c"), keccak256("d")));
+    }
+
+    function test_Version() public view {
+        assertEq(hub.version(), "1.1.0");
+    }
+
     // ============ Configuration Tests ============
 
     function test_SetBatchSizeLimits() public {
@@ -448,6 +520,7 @@ contract ProvenanceHubTest is Test {
         assertEq(batch.merkleRoot, merkleRoot);
         assertEq(batch.arweaveTxId, arweaveTxId);
         assertEq(batch.eventCount, eventCount);
+        assertEq(batch.eventType, "E12_Production");
     }
 
     function test_GetBatch_NotFound() public {
@@ -474,10 +547,11 @@ contract ProvenanceHubTest is Test {
         bytes32 arweaveTxId,
         uint256 timestamp,
         uint256 eventCount,
-        uint256 blockNumber
+        uint256 blockNumber,
+        string memory eventType
     ) {
         ProvenanceHub.BatchCommit memory batch = hub.getBatch(batchId);
-        return (batch.merkleRoot, batch.arweaveTxId, batch.timestamp, batch.eventCount, batch.blockNumber);
+        return (batch.merkleRoot, batch.arweaveTxId, batch.timestamp, batch.eventCount, batch.blockNumber, batch.eventType);
     }
 }
 

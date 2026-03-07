@@ -9,9 +9,8 @@ import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 
 /**
  * @title ProvenanceHub
- * @notice Main contract for committing provenance event batches to blockchain
- * @dev Uses Merkle trees to store only roots on-chain, with full data on Arweave
- * @dev UUPS upgradeable, role-based access control, and pause functionality
+ * @notice AtsurProvenance-compatible: Merkle-batch provenance anchoring with full data on Arweave. Public verification and Phase 1 authorship check.
+ * @dev Uses Merkle trees to store only roots on-chain; batch payload stored on Arweave. UUPS upgradeable, role-based access, pause.
  */
 contract ProvenanceHub is
     UUPSUpgradeable,
@@ -46,13 +45,14 @@ contract ProvenanceHub is
 
     // ============ Storage ============
 
-    /// @notice Batch commit structure - minimal on-chain data
+    /// @notice Batch commit structure - minimal on-chain data (AtsurProvenance-compatible)
     struct BatchCommit {
         bytes32 merkleRoot;        // Merkle root of all events in batch
-        bytes32 arweaveTxId;       // Arweave transaction ID (validated)
-        uint256 timestamp;         // Block timestamp when committed
+        bytes32 arweaveTxId;       // Arweave transaction ID (primary archive reference)
+        uint256 timestamp;         // Block timestamp when committed (anchoredAt)
         uint256 eventCount;        // Number of events in batch
         uint256 blockNumber;       // Block number when committed
+        string eventType;          // Primary CIDOC class in this batch (e.g. E12_Production)
     }
 
     /// @notice Mapping of batch ID to BatchCommit
@@ -69,7 +69,7 @@ contract ProvenanceHub is
 
     // ============ Events ============
 
-    /// @notice Emitted when a new batch is committed
+    /// @notice Emitted when a new batch is committed (legacy)
     event BatchCommitted(
         uint256 indexed batchId,
         bytes32 indexed merkleRoot,
@@ -77,6 +77,14 @@ contract ProvenanceHub is
         uint256 eventCount,
         uint256 timestamp,
         address committer
+    );
+
+    /// @notice Emitted when a new batch is anchored (AtsurProvenance-compatible; use for indexers)
+    event BatchAnchored(
+        uint256 indexed batchIndex,
+        bytes32 merkleRoot,
+        bytes32 arweaveTxId,
+        uint256 eventCount
     );
 
     /// @notice Emitted when batch size limits are updated
@@ -98,6 +106,7 @@ contract ProvenanceHub is
     error InvalidProof();
     error BatchNotFound(uint256 batchId);
     error ZeroAddress();
+    error EmptyEventType();
 
     // ============ Modifiers ============
 
@@ -155,11 +164,34 @@ contract ProvenanceHub is
 
     // ============ Batch Committing ============
 
-    /// @notice Commits a batch of provenance events
+    /// @notice Anchors a batch of provenance events (AtsurProvenance-compatible)
+    /// @param merkleRoot Merkle root of all events in the batch
+    /// @param arweaveTxId Arweave transaction ID where full batch payload is stored
+    /// @param eventCount Number of events in the batch
+    /// @param eventType Primary CIDOC class for this batch (e.g. "E12_Production", "E8_Acquisition")
+    /// @dev Only callable by BATCH_COMMITTER_ROLE when not paused. Emits BatchAnchored for indexers.
+    function anchorBatch(
+        bytes32 merkleRoot,
+        bytes32 arweaveTxId,
+        uint256 eventCount,
+        string calldata eventType
+    )
+        external
+        onlyRole(BATCH_COMMITTER_ROLE)
+        whenNotPaused
+        validArweaveTxId(arweaveTxId)
+    {
+        if (bytes(eventType).length == 0) {
+            revert EmptyEventType();
+        }
+        _commitBatch(merkleRoot, arweaveTxId, eventCount, eventType);
+    }
+
+    /// @notice Commits a batch of provenance events (legacy; defaults to E12_Production)
     /// @param merkleRoot Merkle root of all events in the batch
     /// @param arweaveTxId Arweave transaction ID where full data is stored
     /// @param eventCount Number of events in the batch
-    /// @dev Only callable by BATCH_COMMITTER_ROLE when not paused
+    /// @dev Prefer anchorBatch with explicit eventType for new integrations.
     function commitBatch(
         bytes32 merkleRoot,
         bytes32 arweaveTxId,
@@ -170,45 +202,45 @@ contract ProvenanceHub is
         whenNotPaused
         validArweaveTxId(arweaveTxId)
     {
-        // Reentrancy guard
+        _commitBatch(merkleRoot, arweaveTxId, eventCount, "E12_Production");
+    }
+
+    /// @dev Internal batch commit logic; writes storage and emits both BatchAnchored and BatchCommitted.
+    function _commitBatch(
+        bytes32 merkleRoot,
+        bytes32 arweaveTxId,
+        uint256 eventCount,
+        string memory eventType
+    ) internal {
         require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
         _status = _ENTERED;
-        // Validate batch size
+
         if (eventCount < minBatchSize || eventCount > maxBatchSize) {
             revert InvalidBatchSize(eventCount, minBatchSize, maxBatchSize);
         }
-
-        // Validate Arweave TX ID format
         _validateArweaveTxId(arweaveTxId);
-
-        // Check for duplicate Merkle root
         if (usedMerkleRoots[merkleRoot]) {
             revert DuplicateMerkleRoot(merkleRoot);
         }
-
-        // Check for duplicate Arweave TX ID
         if (usedArweaveTxIds[arweaveTxId]) {
             revert DuplicateArweaveTxId(arweaveTxId);
         }
 
-        // Store batch commit
         uint256 currentBatchId = batchCount;
         batches[currentBatchId] = BatchCommit({
             merkleRoot: merkleRoot,
             arweaveTxId: arweaveTxId,
             timestamp: block.timestamp,
             eventCount: eventCount,
-            blockNumber: block.number
+            blockNumber: block.number,
+            eventType: eventType
         });
 
-        // Mark as used
         usedMerkleRoots[merkleRoot] = true;
         usedArweaveTxIds[arweaveTxId] = true;
-
-        // Increment batch count
         batchCount++;
 
-        // Emit event
+        emit BatchAnchored(currentBatchId, merkleRoot, arweaveTxId, eventCount);
         emit BatchCommitted(
             currentBatchId,
             merkleRoot,
@@ -218,7 +250,6 @@ contract ProvenanceHub is
             msg.sender
         );
 
-        // Reset reentrancy guard
         _status = _NOT_ENTERED;
     }
 
@@ -263,6 +294,46 @@ contract ProvenanceHub is
 
         BatchCommit memory batch = batches[batchId];
         return proof.verify(batch.merkleRoot, leafHash);
+    }
+
+    /// @notice Verifies that a leaf is included in an anchored batch (AtsurProvenance-compatible)
+    /// @param batchIndex Batch to verify against
+    /// @param leaf Computed leaf hash for the CIDOC event
+    /// @param proofPath Sibling hashes from leaf to root (sorted order; use calldata for gas)
+    /// @return true if the leaf is proven in this batch
+    function verifyProvenanceEvent(
+        uint256 batchIndex,
+        bytes32 leaf,
+        bytes32[] calldata proofPath
+    ) external view returns (bool) {
+        if (batchIndex >= batchCount) {
+            revert BatchNotFound(batchIndex);
+        }
+        bytes32 root = batches[batchIndex].merkleRoot;
+        bytes32 computed = leaf;
+        for (uint256 i = 0; i < proofPath.length; i++) {
+            bytes32 sibling = proofPath[i];
+            computed = computed < sibling
+                ? keccak256(abi.encodePacked(computed, sibling))
+                : keccak256(abi.encodePacked(sibling, computed));
+        }
+        return computed == root;
+    }
+
+    // ============ Phase 1 Authorship (AtsurProvenance-compatible) ============
+
+    /// @notice Checks authorship commitment (Phase 1: commitment == presented; Phase 2 can delegate to ZK verifier)
+    /// @param artworkId Artwork identifier (for future ZK public input; unused in Phase 1)
+    /// @param commitment The authorship commitment stored on-chain for this artwork
+    /// @param presented The value presented by the prover (recomputed commitment or ZK proof output)
+    /// @return true if commitment matches presented
+    function checkAuthorship(
+        bytes32 artworkId,
+        bytes32 commitment,
+        bytes32 presented
+    ) external pure returns (bool) {
+        artworkId; // silence unused parameter; used in Phase 2 ZK public inputs
+        return commitment == presented;
     }
 
     // ============ Batch Information ============
@@ -362,10 +433,10 @@ contract ProvenanceHub is
         return ERC1967Utils.getImplementation();
     }
 
-    /// @notice Returns contract version (for upgrade tracking)
+    /// @notice Returns contract version (Atsur 1.0–compatible)
     /// @return Version string
     function version() external pure returns (string memory) {
-        return "1.0.0";
+        return "1.1.0";
     }
 }
 
