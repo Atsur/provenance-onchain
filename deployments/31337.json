@@ -1,0 +1,42 @@
+{
+  "network": "localhost",
+  "chainId": "1337",
+  "deployedAt": "2026-03-07T21:56:07.567Z",
+  "contracts": {
+    "AtsurActorRegistry": {
+      "proxy": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
+      "implementation": "0x5FbDB2315678afecb367f032d93F642f64180aa3"
+    },
+    "AtsurProvenance": {
+      "proxy": "0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9",
+      "implementation": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0"
+    }
+  },
+  "roles": {
+    "admin": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "operator": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC"
+  },
+  "seedActors": {
+    "artist": {
+      "actorId": "0xd468282a214b50553c08c8f0fbdf9cc1b548e7917c47e92f8c44f7c355a62ef7",
+      "wallet": "0x90F79bf6EB2c4f870365E785982E1f101E93b906"
+    },
+    "collector": {
+      "actorId": "0xab6838dd6867ecc7e7a5bc69beeeb7ab7dbbf0c162944fab3701c7b40956470e",
+      "wallet": "0x15d34AAf54267DB7D7c367839AAf71A00a2C6A65"
+    },
+    "gallery": {
+      "actorId": "0x7080ddf6ebec3c3a07db3ade30f2fa445b2009387fdf4d93f9202e22e406b5ae",
+      "wallet": "0x9965507D1a55bcC2695C58ba16FB37d819B0A4dc"
+    },
+    "nga": {
+      "actorId": "0xb74274641668a6af1afb0f2278301f3375e0f457b300adca5121a401157dfb6f",
+      "wallet": "0x976EA74026E726554dB657fA54763abd0C3a0aa9"
+    }
+  },
+  "seedBatch": {
+    "batchId": "0x943ee38981a807221280e4507e60d4594bfada4648e02ca75ac8af088bc5fdfa",
+    "artworkId": "0x42f86613ff72d752e5369c4215ac679fecb37783d04a7e346c62988ccc15ae9f",
+    "root": "0x6c6fa003e7d487cb3de1e097480ca6b0175b4e6be93ad07aae6a3aee7048ae63"
+  }
+}
