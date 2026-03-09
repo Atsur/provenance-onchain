@@ -10,8 +10,8 @@ cache/
 typechain-types/
 
 dev-docs/
-.claude/
-deployments/
+*.claude/
+*.deployments/
 package-lock.json
 
 # Foundry dependencies (git submodules)

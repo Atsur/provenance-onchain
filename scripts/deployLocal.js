@@ -2,7 +2,7 @@
  * deployLocal.js — Deploy and seed both Atsur contracts on a local Hardhat node.
  *
  * Uses Hardhat's built-in test accounts so no .env is needed.
- * Saves addresses to deployments/31337.json for other scripts to consume.
+ * Saves addresses to .deployments/31337.json for other scripts to consume.
  *
  * Usage (two options):
  *
@@ -13,7 +13,7 @@
  *     Terminal 1:  npx hardhat node
  *     Terminal 2:  npx hardhat run scripts/deployLocal.js --network localhost
  *
- * After running, addresses are in deployments/31337.json and printed to stdout.
+ * After running, addresses are in .deployments/31337.json and printed to stdout.
  */
 
 const { ethers, upgrades } = require("hardhat");

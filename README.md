@@ -118,11 +118,11 @@ This:
 
 - Deploys `AtsurActorRegistry` and `AtsurProvenance` (or `ProvenanceHub`) to the local network.
 - Seeds a small set of test actors and roles.
-- Writes deployed addresses (and RPC URL) into `deployments/31337.json`.
+- Writes deployed addresses (and RPC URL) into `.deployments/31337.json`.
 
 Your backend / CLI / UI can then:
 
-- Read `deployments/31337.json` to discover contract addresses.
+- Read `.deployments/31337.json` to discover contract addresses.
 - Connect via `http://127.0.0.1:8545` (`localhost` Hardhat node, chain ID `1337`).
 
 For more detail, see `DEPLOYMENT.md`.
