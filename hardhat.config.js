@@ -30,6 +30,11 @@ module.exports = {
         count: 20,
       },
     },
+    localhost: {
+      url: "http://127.0.0.1:8545",
+      chainId: 1337,
+      loggingEnabled: false,
+    },
     liskSepolia: {
       url: process.env.LISK_SEPOLIA_RPC_URL || "https://rpc.sepolia-api.lisk.com",
       chainId: 4202,

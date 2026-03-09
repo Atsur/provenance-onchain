@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(forge build)",
-      "Bash(forge test -v)"
-    ]
-  }
-}

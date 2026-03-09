@@ -17,8 +17,7 @@
  */
 
 const { ethers, upgrades } = require("hardhat");
-const fs   = require("fs");
-const path = require("path");
+const { syncDeployment } = require("./syncDeployment");
 
 // ─── Hardhat well-known test accounts (mnemonic: test test ... junk) ────────
 // Index  Purpose
@@ -218,9 +217,6 @@ async function main() {
     console.log("  ✓ checkAuthorship sanity:", authorshipOk ? "PASS" : "FAIL");
 
     // ── 6. Save deployment manifest ──────────────────────────────────────────
-    const deploymentsDir = path.join(__dirname, "..", "deployments");
-    fs.mkdirSync(deploymentsDir, { recursive: true });
-
     const manifest = {
         network:        "localhost",
         chainId:        network.chainId.toString(),
@@ -252,14 +248,13 @@ async function main() {
         },
     };
 
-    const manifestPath = path.join(deploymentsDir, "31337.json");
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    console.log("\n[6] Saving deployment manifest...");
+    syncDeployment(manifest, "31337.json");
 
     // ── Summary ──────────────────────────────────────────────────────────────
     console.log("\n=== Deployment Complete ===");
     console.log("AtsurActorRegistry proxy:", registryAddress);
     console.log("AtsurProvenance proxy:   ", provenanceAddress);
-    console.log("\nManifest saved to:", path.relative(process.cwd(), manifestPath));
 
     console.log("\n--- Hardhat test accounts ---");
     const labels = ["deployer", "admin   ", "operator", "artist  ", "collector", "gallery ", "nga     ", "verifier", "stranger"];

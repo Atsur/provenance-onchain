@@ -16,6 +16,7 @@
 
 const { ethers, upgrades } = require("hardhat");
 require("dotenv").config();
+const { syncDeployment } = require("./syncDeployment");
 
 async function main() {
     const [deployer] = await ethers.getSigners();
@@ -92,6 +93,27 @@ async function main() {
 
         console.log("  ✓ Admin transferred to multisig. Deployer admin renounced.");
     }
+
+    // ─── 5. Save & sync deployment manifest ─────────────────────────
+    const networkInfo = await ethers.provider.getNetwork();
+    const chainId     = networkInfo.chainId.toString();
+    const manifest = {
+        network:    networkInfo.name,
+        chainId,
+        deployedAt: new Date().toISOString(),
+        contracts: {
+            AtsurActorRegistry: { proxy: registryAddress },
+            AtsurProvenance:    { proxy: provenanceAddress },
+        },
+        roles: {
+            deployer:  deployer.address,
+            operator,
+            pauser,
+            ...(multisig ? { multisig } : {}),
+        },
+    };
+    console.log("\n[5] Saving deployment manifest...");
+    syncDeployment(manifest, `${chainId}.json`);
 
     // ─── Summary ────────────────────────────────────────────────────
     console.log("\n=== Deployment Complete ===");

@@ -1,14 +1,21 @@
 # Dependencies
 node_modules/
 
-# Foundry dependencies (git submodules)
-lib/
+
 
 # Build artifacts
 out/
 artifacts/
 cache/
 typechain-types/
+
+dev-docs/
+.claude/
+deployments/
+package-lock.json
+
+# Foundry dependencies (git submodules)
+lib/
 
 # Environment variables
 .env

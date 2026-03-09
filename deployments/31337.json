@@ -1,7 +1,7 @@
 {
   "network": "localhost",
   "chainId": "1337",
-  "deployedAt": "2026-03-07T21:56:07.567Z",
+  "deployedAt": "2026-03-08T21:50:47.513Z",
   "contracts": {
     "AtsurActorRegistry": {
       "proxy": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
@@ -35,7 +35,7 @@
     }
   },
   "seedBatch": {
-    "batchId": "0x943ee38981a807221280e4507e60d4594bfada4648e02ca75ac8af088bc5fdfa",
+    "batchId": "0xa82b3a2344bfa24b85242ca5ac687edc5ac367236e607bffc31cbf27058c96d0",
     "artworkId": "0x42f86613ff72d752e5369c4215ac679fecb37783d04a7e346c62988ccc15ae9f",
     "root": "0x6c6fa003e7d487cb3de1e097480ca6b0175b4e6be93ad07aae6a3aee7048ae63"
   }
