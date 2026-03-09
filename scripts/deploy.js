@@ -33,18 +33,25 @@ async function main() {
     const MIN_BATCH_SIZE = 100;
     const MAX_BATCH_SIZE = 1000;
 
-    // Deploy implementation
-    console.log("\nDeploying ProvenanceHub implementation...");
-    const ProvenanceHub = await hre.ethers.getContractFactory("ProvenanceHub");
-    
-    // Deploy as UUPS upgradeable proxy
+    // ─── 1. Deploy AtsurActorRegistry ──────────────────────────────────────────
+    console.log("\nDeploying AtsurActorRegistry...");
+    const RegistryFactory = await hre.ethers.getContractFactory("AtsurActorRegistry");
+    const registry = await upgrades.deployProxy(
+        RegistryFactory,
+        [deployer.address, deployer.address],
+        { initializer: "initialize", kind: "uups" }
+    );
+    await registry.waitForDeployment();
+    const registryAddress = await registry.getAddress();
+    console.log("  Registry (proxy):", registryAddress);
+
+    // ─── 2. Deploy AtsurProvenance ────────────────────────────────────────────
+    console.log("\nDeploying AtsurProvenance...");
+    const AtsurProvenance = await hre.ethers.getContractFactory("AtsurProvenance");
     const hub = await upgrades.deployProxy(
-        ProvenanceHub,
-        [deployer.address, MIN_BATCH_SIZE, MAX_BATCH_SIZE],
-        { 
-            initializer: "initialize",
-            kind: "uups"
-        }
+        AtsurProvenance,
+        [deployer.address, registryAddress, MIN_BATCH_SIZE, MAX_BATCH_SIZE],
+        { initializer: "initialize", kind: "uups" }
     );
 
     await hub.waitForDeployment();
@@ -52,8 +59,9 @@ async function main() {
     const implementationAddress = await upgrades.erc1967.getImplementationAddress(hubAddress);
 
     console.log("\n=== Deployment Summary ===");
-    console.log("Hub (Proxy):", hubAddress);
-    console.log("Implementation:", implementationAddress);
+    console.log("AtsurActorRegistry (proxy):", registryAddress);
+    console.log("AtsurProvenance (proxy):  ", hubAddress);
+    console.log("AtsurProvenance impl:     ", implementationAddress);
     console.log("Version:", await hub.version());
     console.log("Min batch size:", (await hub.minBatchSize()).toString());
     console.log("Max batch size:", (await hub.maxBatchSize()).toString());

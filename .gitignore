@@ -21,6 +21,9 @@ lib/
 .env
 .env.local
 
+# OpenZeppelin upgrade manifests (deployment state; keep local)
+.openzeppelin/
+
 # IDE
 .vscode/
 .idea/

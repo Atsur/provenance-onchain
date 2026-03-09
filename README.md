@@ -5,7 +5,7 @@ Smart contracts for **immutable, verifiable provenance** of artworks and cultura
 ### What this repository is
 
 - **On-chain backbone for provenance**: Minimal, gas-efficient contracts that anchor batches of provenance events on-chain while storing full event data on Arweave.
-- **Identity + provenance**: A dedicated actor registry (`AtsurActorRegistry`) and a provenance hub (`AtsurProvenance` / `ProvenanceHub`) designed to work together.
+- **Identity + provenance**: A dedicated actor registry (`AtsurActorRegistry`) and a provenance hub (`AtsurProvenance`) designed to work together.
 - **Implementation of the Atsur whitepaper**: Aligned with the Atsur provenance spec (Merkle batching, Arweave, CIDOC events, authorship checks).
 
 Internal implementation notes, AI design docs, and low-level tuning live in `dev-docs/` and are intentionally excluded from the published repository.
@@ -22,7 +22,7 @@ Internal implementation notes, AI design docs, and low-level tuning live in `dev
     - Wallet linking (custodial → self-custodial).
     - Institutional verifier delegation and revocation.
 
-- **AtsurProvenance / ProvenanceHub**
+- **AtsurProvenance**
   - Anchors **Merkle roots** of provenance event batches.
   - References **Arweave transaction IDs** for full batch payloads.
   - Stores event metadata such as `eventType` (CIDOC class) and event count.
@@ -116,7 +116,7 @@ npm run deploy:local
 
 This:
 
-- Deploys `AtsurActorRegistry` and `AtsurProvenance` (or `ProvenanceHub`) to the local network.
+- Deploys `AtsurActorRegistry` and `AtsurProvenance` to the local network.
 - Seeds a small set of test actors and roles.
 - Writes deployed addresses (and RPC URL) into `.deployments/31337.json`.
 
@@ -163,7 +163,7 @@ Access control:
 - `DEFAULT_ADMIN_ROLE`: multisig or governance; manages upgrades and roles.
 - `OPERATOR_ROLE`: hot wallet used by the Atsur backend for routine operations.
 
-### `AtsurProvenance` / `ProvenanceHub`
+### `AtsurProvenance`
 
 - Anchor provenance batches:
   - `anchorBatch(merkleRoot, arweaveTxId, eventCount, eventType)`
