@@ -1,4 +1,4 @@
-## ATSUR Registry Onchain
+## ATSUR Provenance Onchain
 
 Smart contracts for **immutable, verifiable provenance** of artworks and cultural assets, built on EVM chains with Arweave-backed storage.
 
@@ -40,7 +40,7 @@ Internal implementation notes, AI design docs, and low-level tuning live in `dev
 ## Repository layout
 
 ```text
-registry-onchain/
+provenance-onchain/
 ├── contracts/              # Core Solidity contracts
 │   ├── AtsurActorRegistry.sol    # Actor / identity registry
 │   └── AtsurProvenance.sol      # Provenance hub (batch anchoring + verification)

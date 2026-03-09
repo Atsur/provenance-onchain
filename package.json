@@ -1,5 +1,5 @@
 {
-  "name": "atsur-registry-onchain",
+  "name": "atsur-provenance-onchain",
   "version": "1.0.0",
   "description": "Smart contracts for ATSUR Registry provenance event logging",
   "main": "index.js",

@@ -16,7 +16,7 @@ const path = require("path");
  * @param {string} filename  e.g. "4202.json"
  */
 function syncDeployment(manifest, filename) {
-    // 1. Save to registry-onchain/.deployments/<filename>
+    // 1. Save to provenance-onchain/.deployments/<filename>
     const onchainDir = path.join(__dirname, "..", ".deployments");
     fs.mkdirSync(onchainDir, { recursive: true });
     const onchainPath = path.join(onchainDir, filename);
