@@ -25,6 +25,7 @@ module.exports = {
   networks: {
     hardhat: {
       chainId: 1337,
+      allowBlocksWithSameTimestamp: true,
       accounts: {
         mnemonic: "test test test test test test test test test test test junk",
         count: 20,

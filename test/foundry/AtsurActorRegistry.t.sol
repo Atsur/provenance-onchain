@@ -21,7 +21,7 @@ import { ERC1967Proxy }       from "@openzeppelin/contracts/proxy/ERC1967/ERC196
  *   - Access control (onlyAtsur, onlyInstitutionOrAtsur)
  *   - Fuzz: commitment computation
  *   - Fuzz: actorId uniqueness from distinct UUIDs
- *   - Invariant: actorExists implies valid custodialWallet
+ *   - Invariant: isActorRegistered implies valid custodialWallet
  */
 contract AtsurActorRegistryTest is Test {
 
@@ -150,7 +150,7 @@ contract AtsurActorRegistryTest is Test {
         vm.prank(operator);
         registry.registerActor(actorId, AtsurActorRegistry.ActorType.E21_Person, commitment, "smile_id", userWallet);
 
-        assertTrue(registry.actorExists(actorId));
+        assertTrue(registry.isActorRegistered(actorId));
         assertEq(registry.walletToActor(userWallet), actorId);
 
         AtsurActorRegistry.Actor memory actor = registry.getActor(actorId);
@@ -201,7 +201,7 @@ contract AtsurActorRegistryTest is Test {
         bytes32 actorId = _actorId("admin-test-uuid");
         vm.prank(admin);
         registry.registerActor(actorId, AtsurActorRegistry.ActorType.E74_Group, SALT, "smile_id", newWallet);
-        assertTrue(registry.actorExists(actorId));
+        assertTrue(registry.isActorRegistered(actorId));
     }
 
     // ─────────────────────────────────────────────
@@ -296,7 +296,8 @@ contract AtsurActorRegistryTest is Test {
         vm.prank(operator);
         registry.registerActor(actorId, AtsurActorRegistry.ActorType.E21_Person, commitment, "smile_id", userWallet);
 
-        bool valid = registry.verifyKycCommitment(actorId, "smile_id", providerUid, uuid, SALT);
+        // SEV-001: pass pre-computed commitment — salt never goes on-chain
+        bool valid = registry.verifyKycCommitment(actorId, _commitment("smile_id", providerUid, uuid, SALT));
         assertTrue(valid);
     }
 
@@ -308,7 +309,7 @@ contract AtsurActorRegistryTest is Test {
         vm.prank(operator);
         registry.registerActor(actorId, AtsurActorRegistry.ActorType.E21_Person, commitment, "smile_id", userWallet);
 
-        bool valid = registry.verifyKycCommitment(actorId, "smile_id", "uid-001", uuid, keccak256("wrong-salt"));
+        bool valid = registry.verifyKycCommitment(actorId, _commitment("smile_id", "uid-001", uuid, keccak256("wrong-salt")));
         assertFalse(valid);
     }
 
@@ -323,8 +324,16 @@ contract AtsurActorRegistryTest is Test {
         vm.prank(operator);
         registry.setActorStatus(actorId, AtsurActorRegistry.ActorStatus.Suspended);
 
-        bool valid = registry.verifyKycCommitment(actorId, "smile_id", "uid-001", uuid, SALT);
+        bool valid = registry.verifyKycCommitment(actorId, _commitment("smile_id", "uid-001", uuid, SALT));
         assertFalse(valid);
+    }
+
+    // SEV-001 fix: non-existent actorId must revert ActorNotFound
+    function test_verifyKycCommitment_reverts_nonExistentActor() public {
+        bytes32 unknownId  = keccak256("nobody-uuid");
+        bytes32 commitment = _commitment("smile_id", "uid", "nobody-uuid", SALT);
+        vm.expectRevert(abi.encodeWithSelector(AtsurActorRegistry.ActorNotFound.selector, unknownId));
+        registry.verifyKycCommitment(unknownId, commitment);
     }
 
     // ─────────────────────────────────────────────
@@ -402,6 +411,44 @@ contract AtsurActorRegistryTest is Test {
         registry.revokeVerifier(institutionId, verifierId);
     }
 
+    // M-10 (SEV-004)
+    function test_delegateVerifier_reverts_zeroVerifierId() public {
+        bytes32 institutionId = _registerInstitution();
+
+        vm.prank(operator);
+        vm.expectRevert(AtsurActorRegistry.InvalidActorId.selector);
+        registry.delegateVerifier(institutionId, bytes32(0), false, 0);
+    }
+
+    // M-17 (SEV-005)
+    function test_delegateVerifier_reverts_permanentlyRevoked() public {
+        bytes32 institutionId = _registerInstitution();
+        bytes32 verifierId    = keccak256("verifier-uuid");
+
+        // Delegate then revoke → permanently blacklisted
+        vm.prank(operator);
+        registry.delegateVerifier(institutionId, verifierId, false, 0);
+        vm.prank(operator);
+        registry.revokeVerifier(institutionId, verifierId);
+        assertTrue(registry.revokedVerifiers(verifierId));
+
+        // Re-delegation must revert
+        vm.prank(operator);
+        vm.expectRevert(
+            abi.encodeWithSelector(AtsurActorRegistry.VerifierPermanentlyRevoked.selector, verifierId)
+        );
+        registry.delegateVerifier(institutionId, verifierId, false, 0);
+
+        // Admin clears the flag → re-delegation succeeds
+        vm.prank(admin);
+        registry.clearVerifierRevocation(verifierId);
+        assertFalse(registry.revokedVerifiers(verifierId));
+
+        vm.prank(operator);
+        registry.delegateVerifier(institutionId, verifierId, false, 0);
+        assertTrue(registry.isVerifierDelegated(institutionId, verifierId));
+    }
+
     // ─────────────────────────────────────────────
     // setActorStatus
     // ─────────────────────────────────────────────
@@ -438,6 +485,23 @@ contract AtsurActorRegistryTest is Test {
         vm.prank(stranger);
         vm.expectRevert(AtsurActorRegistry.NotAtsur.selector);
         registry.certifyVerifierTraining(institutionId, verifierId);
+    }
+
+    // I-3 (SEV-021)
+    function test_getActorByWallet_reverts_walletNotMapped() public {
+        vm.expectRevert(
+            abi.encodeWithSelector(AtsurActorRegistry.WalletNotMapped.selector, stranger)
+        );
+        registry.getActorByWallet(stranger);
+    }
+
+    // L-6 (SEV-009)
+    function test_authorizeUpgrade_reverts_notAContract() public {
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(AtsurActorRegistry.NotAContract.selector, stranger)
+        );
+        registry.upgradeToAndCall(stranger, "");
     }
 
     // ─────────────────────────────────────────────
@@ -497,7 +561,7 @@ contract AtsurActorRegistryTest is Test {
     ) public {
         vm.assume(actorId != bytes32(0));
         vm.assume(wallet != address(0));
-        vm.assume(!registry.actorExists(actorId));
+        vm.assume(!registry.isActorRegistered(actorId));
         vm.assume(registry.walletToActor(wallet) == bytes32(0));
 
         vm.prank(operator);
@@ -505,7 +569,7 @@ contract AtsurActorRegistryTest is Test {
             actorId, AtsurActorRegistry.ActorType.E21_Person, commitment, "stub", wallet
         );
 
-        assertTrue(registry.actorExists(actorId));
+        assertTrue(registry.isActorRegistered(actorId));
         assertEq(registry.walletToActor(wallet), actorId);
         assertEq(registry.getActor(actorId).kycCommitment, commitment);
     }
@@ -524,6 +588,7 @@ contract AtsurActorRegistryTest is Test {
         vm.prank(operator);
         registry.registerActor(actorId, AtsurActorRegistry.ActorType.E21_Person, commitment, "smile_id", newWallet);
 
-        assertFalse(registry.verifyKycCommitment(actorId, "smile_id", providerUid, uuid, wrongSalt));
+        // SEV-001: caller computes wrong commitment (bad salt) off-chain — should return false
+        assertFalse(registry.verifyKycCommitment(actorId, _commitment("smile_id", providerUid, uuid, wrongSalt)));
     }
 }

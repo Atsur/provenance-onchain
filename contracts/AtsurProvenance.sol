@@ -4,6 +4,7 @@ pragma solidity ^0.8.23;
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 import "./AtsurActorRegistry.sol";
@@ -12,6 +13,8 @@ import "./AtsurActorRegistry.sol";
  * @title AtsurProvenance
  * @notice On-chain provenance anchoring for the Atsur art ecosystem.
  * @dev UUPS upgradeable. Admin = multisig (DEFAULT_ADMIN_ROLE). Committer = hot wallet (BATCH_COMMITTER_ROLE).
+ *      Upgrades are gated by UPGRADER_ROLE, which should be held by a TimelockController — see
+ *      scripts/setupTimelock.js. DEFAULT_ADMIN_ROLE can grant/revoke UPGRADER_ROLE at any time.
  *
  * ARCHITECTURE:
  * - All provenance events are CIDOC-CRM JSON-LD documents stored on Arweave.
@@ -42,7 +45,7 @@ import "./AtsurActorRegistry.sol";
  *   E11_Modification         — restoration, conservation
  *   E6_Destruction           — recorded destruction
  */
-contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableUpgradeable {
+contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableUpgradeable, ReentrancyGuardUpgradeable {
 
     // ─────────────────────────────────────────────
     // ROLES
@@ -53,6 +56,9 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
 
     /// @notice Role for pausing batch commits (emergency)
     bytes32 public constant PAUSER_ROLE          = keccak256("PAUSER_ROLE");
+
+    /// @notice Authorises contract upgrades — should be held by a TimelockController, not the admin directly.
+    bytes32 public constant UPGRADER_ROLE        = keccak256("UPGRADER_ROLE");
 
     // ─────────────────────────────────────────────
     // AUTHORSHIP LEAF SCHEME
@@ -65,6 +71,9 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
      *         This allows checkAuthorship() to verify without any on-chain artwork state.
      */
     bytes32 public constant AUTHORSHIP_LEAF_PREFIX = keccak256("ATSUR_AUTHORSHIP_V1");
+
+    /// @notice Sentinel value for fromActorId when there is no prior custodian (first-time custody record).
+    bytes32 public constant GENESIS_ACTOR = bytes32(0);
 
     // ─────────────────────────────────────────────
     // STRUCTS — gas-optimised slot packing
@@ -111,13 +120,8 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
     uint256 public minBatchSize;
     uint256 public maxBatchSize;
 
-    // Reentrancy guard (avoids inheriting a whole contract for one variable)
-    uint256 private constant _NOT_ENTERED = 1;
-    uint256 private constant _ENTERED     = 2;
-    uint256 private _status;
-
-    /// @dev Storage gap — reserve 50 slots for future upgrades
-    uint256[50] private __gap;
+    /// @dev Storage gap — reserve 51 slots (was 50 + 1 removed _status slot) for future upgrades
+    uint256[51] private __gap;
 
     // ─────────────────────────────────────────────
     // EVENTS
@@ -183,28 +187,24 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
 
     error InvalidBatchSize(uint256 eventCount, uint256 minSize, uint256 maxSize);
     error InvalidArweaveTxId(bytes32 txId);
+    error InvalidMerkleRoot(bytes32 root);
     error DuplicateMerkleRoot(bytes32 merkleRoot);
     error DuplicateArweaveTxId(bytes32 arweaveTxId);
     error BatchNotFound(bytes32 batchId);
+    error BatchAlreadyExists(bytes32 batchId);
     error InvalidMerkleProof();
     error SubmitterNotInRegistry(bytes32 submitterActorId);
+    error SubmitterNotActive(bytes32 submitterActorId);
     error AttestorNotActive(bytes32 attestorActorId);
     error RecipientNotInRegistry(bytes32 toActorId);
     error VerifierNotCertified(bytes32 verifierId);
     error EmptyEventType();
     error ZeroAddress();
-    error ReentrantCall();
+    error NotAContract(address addr);
 
     // ─────────────────────────────────────────────
     // MODIFIERS
     // ─────────────────────────────────────────────
-
-    modifier nonReentrant() {
-        if (_status == _ENTERED) revert ReentrantCall();
-        _status = _ENTERED;
-        _;
-        _status = _NOT_ENTERED;
-    }
 
     modifier validArweaveTxId(bytes32 txId) {
         if (txId == bytes32(0)) revert InvalidArweaveTxId(txId);
@@ -227,7 +227,9 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
 
     /**
      * @notice Initialise the provenance contract.
-     * @param admin           Multisig address — DEFAULT_ADMIN_ROLE (upgrade + admin authority).
+     * @param admin           Multisig address — DEFAULT_ADMIN_ROLE (admin authority) and
+     *                        UPGRADER_ROLE (upgrade authority). Transfer UPGRADER_ROLE to a
+     *                        TimelockController via setupTimelock.js before mainnet use.
      * @param registryAddress Deployed AtsurActorRegistry proxy address.
      * @param initialMin      Minimum events per batch.
      * @param initialMax      Maximum events per batch.
@@ -244,13 +246,14 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
         }
         __AccessControl_init();
         __Pausable_init();
+        __ReentrancyGuard_init();
 
-        _status        = _NOT_ENTERED;
         actorRegistry  = AtsurActorRegistry(registryAddress);
         minBatchSize   = initialMin;
         maxBatchSize   = initialMax;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(UPGRADER_ROLE, admin);
         emit BatchSizeLimitsUpdated(initialMin, initialMax);
     }
 
@@ -287,19 +290,23 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
         returns (bytes32 batchId)
     {
         if (bytes(eventType).length == 0) revert EmptyEventType();
+        if (merkleRoot == bytes32(0)) revert InvalidMerkleRoot(merkleRoot);
         if (eventCount < minBatchSize || eventCount > maxBatchSize) {
             revert InvalidBatchSize(eventCount, minBatchSize, maxBatchSize);
         }
         if (usedMerkleRoots[merkleRoot])    revert DuplicateMerkleRoot(merkleRoot);
         if (usedArweaveTxIds[arweaveTxId]) revert DuplicateArweaveTxId(arweaveTxId);
 
-        if (!actorRegistry.actorExists(submitterActorId)) {
-            revert SubmitterNotInRegistry(submitterActorId);
+        AtsurActorRegistry.Actor memory submitter = actorRegistry.getActor(submitterActorId);
+        if (submitter.registeredAt == 0) revert SubmitterNotInRegistry(submitterActorId);
+        if (submitter.status != AtsurActorRegistry.ActorStatus.Active) {
+            revert SubmitterNotActive(submitterActorId);
         }
 
         _validateArweaveTxId(arweaveTxId);
 
         batchId = keccak256(abi.encodePacked(block.timestamp, submitterActorId, nonce));
+        if (batches[batchId].exists) revert BatchAlreadyExists(batchId);
 
         batches[batchId] = ProvenanceBatch({
             merkleRoot:       merkleRoot,
@@ -356,7 +363,8 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
      *
      * @param batchId          Batch containing the transfer event
      * @param artworkId        The artwork being transferred
-     * @param fromActorId      Current custodian (bytes32(0) for genesis / unknown)
+     * @param fromActorId      Previous custodian actorId. Pass GENESIS_ACTOR (bytes32(0))
+     *                         for a first-time custody record with no prior custodian.
      * @param toActorId        New custodian — must exist in AtsurActorRegistry
      * @param attestorActorId  Institution or Tier-1 actor certifying this transfer
      * @param verifierId       Opaque delegated verifier ID (bytes32(0) = direct attestation)
@@ -375,7 +383,7 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
         bytes32[] calldata proof,
         string    calldata transferType
     ) external onlyRole(BATCH_COMMITTER_ROLE) whenNotPaused batchMustExist(batchId) {
-        if (!actorRegistry.actorExists(toActorId))   revert RecipientNotInRegistry(toActorId);
+        if (!actorRegistry.isActorRegistered(toActorId)) revert RecipientNotInRegistry(toActorId);
         _requireActiveActor(attestorActorId);
 
         if (verifierId != bytes32(0)) {
@@ -468,21 +476,21 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
      *         Use verifyProofView for read-only verification.
      */
     function verifyProof(
-        bytes32         batchId,
-        bytes32         leafHash,
-        bytes32[] memory proof
+        bytes32            batchId,
+        bytes32            leafHash,
+        bytes32[] calldata proof
     ) external whenNotPaused batchMustExist(batchId) returns (bool isValid) {
-        isValid = MerkleProof.verify(proof, batches[batchId].merkleRoot, leafHash);
-        emit ProofVerified(batchId, leafHash, isValid);
+        isValid = MerkleProof.verifyCalldata(proof, batches[batchId].merkleRoot, leafHash);
+        if (isValid) emit ProofVerified(batchId, leafHash, isValid);
     }
 
     /// @notice Verifies a Merkle proof — view, no event emitted. Gas-efficient for off-chain reads.
     function verifyProofView(
-        bytes32         batchId,
-        bytes32         leafHash,
-        bytes32[] memory proof
+        bytes32            batchId,
+        bytes32            leafHash,
+        bytes32[] calldata proof
     ) external view batchMustExist(batchId) returns (bool) {
-        return MerkleProof.verify(proof, batches[batchId].merkleRoot, leafHash);
+        return MerkleProof.verifyCalldata(proof, batches[batchId].merkleRoot, leafHash);
     }
 
     /**
@@ -532,7 +540,7 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
         _pause();
     }
 
-    function unpauseBatchCommits() external onlyRole(PAUSER_ROLE) {
+    function unpauseBatchCommits() external onlyRole(DEFAULT_ADMIN_ROLE) {
         _unpause();
     }
 
@@ -553,10 +561,7 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
     // ─────────────────────────────────────────────
 
     function _requireActiveActor(bytes32 actorId) internal view {
-        AtsurActorRegistry.Actor memory a = actorRegistry.getActor(actorId);
-        if (a.status != AtsurActorRegistry.ActorStatus.Active) {
-            revert AttestorNotActive(actorId);
-        }
+        if (!actorRegistry.isActorActive(actorId)) revert AttestorNotActive(actorId);
     }
 
     function _requireValidProof(
@@ -568,7 +573,7 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
     }
 
     function _validateArweaveTxId(bytes32 txId) internal pure {
-        if (txId == bytes32(0)) revert InvalidArweaveTxId(txId);
+        // Zero case is caught upstream by the validArweaveTxId modifier
         // Reject low-entropy IDs (e.g. all same byte) — real Arweave TX IDs are high-entropy
         uint8 first   = uint8(txId[0]);
         bool  allSame = true;
@@ -585,6 +590,9 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
     // UUPS — upgrade authorisation
     // ─────────────────────────────────────────────
 
-    /// @dev Only DEFAULT_ADMIN_ROLE (multisig) can authorise upgrades.
-    function _authorizeUpgrade(address /*newImplementation*/) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @dev Only UPGRADER_ROLE (TimelockController) can authorise upgrades.
+    ///      DEFAULT_ADMIN_ROLE can grant UPGRADER_ROLE at any time if the timelock needs to change.
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {
+        if (newImplementation.code.length == 0) revert NotAContract(newImplementation);
+    }
 }

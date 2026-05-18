@@ -252,6 +252,20 @@ contract AtsurProvenanceTest is Test {
         );
     }
 
+    // M-21 (SEV-006)
+    function test_anchorBatch_reverts_submitterNotActive() public {
+        vm.prank(admin);
+        registry.setActorStatus(submitterActorId, AtsurActorRegistry.ActorStatus.Suspended);
+
+        vm.prank(committer);
+        vm.expectRevert(
+            abi.encodeWithSelector(AtsurProvenance.SubmitterNotActive.selector, submitterActorId)
+        );
+        provenance.anchorBatch(
+            keccak256("r"), keccak256("a"), 1, submitterActorId, keccak256("n"), "E12_Production"
+        );
+    }
+
     function test_anchorBatch_reverts_emptyEventType() public {
         vm.prank(committer);
         vm.expectRevert(AtsurProvenance.EmptyEventType.selector);
@@ -264,6 +278,35 @@ contract AtsurProvenanceTest is Test {
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.InvalidArweaveTxId.selector, bytes32(0)));
         provenance.anchorBatch(keccak256("r"), bytes32(0), 1, submitterActorId, keccak256("n"), "E12_Production");
+    }
+
+    // SEV-003 fix
+    function test_anchorBatch_reverts_zeroMerkleRoot() public {
+        vm.prank(committer);
+        vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.InvalidMerkleRoot.selector, bytes32(0)));
+        provenance.anchorBatch(bytes32(0), keccak256("arweave"), 1, submitterActorId, keccak256("nonce"), "E12_Production");
+    }
+
+    // SEV-002 fix
+    function test_anchorBatch_reverts_batchAlreadyExists() public {
+        bytes32 sharedNonce = keccak256("collision-nonce");
+        bytes32 root1       = keccak256("root-col-1");
+        bytes32 arweave1    = keccak256("arweave-col-1");
+        bytes32 root2       = keccak256("root-col-2");
+        bytes32 arweave2    = keccak256("arweave-col-2");
+
+        // First anchor succeeds — batchId = keccak256(block.timestamp, submitterActorId, sharedNonce)
+        vm.prank(committer);
+        bytes32 batchId = provenance.anchorBatch(root1, arweave1, 1, submitterActorId, sharedNonce, "E12_Production");
+
+        // Compute expected batchId for the second call (same timestamp, same submitter, same nonce)
+        bytes32 expectedBatchId = keccak256(abi.encodePacked(block.timestamp, submitterActorId, sharedNonce));
+        assertEq(batchId, expectedBatchId);
+
+        // Second anchor in the same block with the same nonce → same batchId → revert
+        vm.prank(committer);
+        vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.BatchAlreadyExists.selector, expectedBatchId));
+        provenance.anchorBatch(root2, arweave2, 1, submitterActorId, sharedNonce, "E12_Production");
     }
 
     // ─────────────────────────────────────────────
@@ -389,7 +432,7 @@ contract AtsurProvenanceTest is Test {
     function test_unpause_restoresBatchAnchoring() public {
         vm.prank(pauser);
         provenance.pauseBatchCommits();
-        vm.prank(pauser);
+        vm.prank(admin);  // only admin can unpause (SEV-008)
         provenance.unpauseBatchCommits();
 
         assertFalse(provenance.paused());
@@ -400,6 +443,21 @@ contract AtsurProvenanceTest is Test {
             submitterActorId, keccak256("n-after-unpause"), "E12_Production"
         );
         assertTrue(provenance.getBatch(batchId).exists);
+    }
+
+    // L-2 (SEV-008)
+    function test_pauserCannotUnpause_onlyAdminCan() public {
+        vm.prank(pauser);
+        provenance.pauseBatchCommits();
+        assertTrue(provenance.paused());
+
+        vm.prank(pauser);
+        vm.expectRevert();
+        provenance.unpauseBatchCommits();
+
+        vm.prank(admin);
+        provenance.unpauseBatchCommits();
+        assertFalse(provenance.paused());
     }
 
     function test_nonPauserCannotPause() public {
@@ -510,5 +568,14 @@ contract AtsurProvenanceTest is Test {
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.DuplicateMerkleRoot.selector, root));
         provenance.anchorBatch(root, arweave2, 1, submitterActorId, nonce2, "E12_Production");
+    }
+
+    // L-6 (SEV-009)
+    function test_authorizeUpgrade_reverts_notAContract() public {
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(AtsurProvenance.NotAContract.selector, stranger)
+        );
+        provenance.upgradeToAndCall(stranger, "");
     }
 }

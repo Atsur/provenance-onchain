@@ -255,6 +255,17 @@ describe("AtsurProvenance", function () {
             ).to.be.revertedWithCustomError(provenance, "SubmitterNotInRegistry");
         });
 
+        // M-21 (SEV-006)
+        it("reverts SubmitterNotActive for suspended submitter", async function () {
+            const ActorStatus = { Active: 0, Suspended: 1, Revoked: 2 };
+            await registry.connect(admin).setActorStatus(submitterActorId, ActorStatus.Suspended);
+            await expect(
+                provenance.connect(committer).anchorBatch(
+                    merkleRoot, arweaveTxId, 5, submitterActorId, nonce, "E12_Production"
+                )
+            ).to.be.revertedWithCustomError(provenance, "SubmitterNotActive");
+        });
+
         it("reverts with empty eventType", async function () {
             await expect(
                 provenance.connect(committer).anchorBatch(
@@ -269,6 +280,40 @@ describe("AtsurProvenance", function () {
                     merkleRoot, ethers.ZeroHash, 5, submitterActorId, nonce, "E12_Production"
                 )
             ).to.be.revertedWithCustomError(provenance, "InvalidArweaveTxId");
+        });
+
+        // SEV-003 fix
+        it("reverts InvalidMerkleRoot for zero merkle root", async function () {
+            await expect(
+                provenance.connect(committer).anchorBatch(
+                    ethers.ZeroHash, arweaveTxId, 5, submitterActorId, nonce, "E12_Production"
+                )
+            ).to.be.revertedWithCustomError(provenance, "InvalidMerkleRoot");
+        });
+
+        // SEV-002 fix
+        it("reverts BatchAlreadyExists when same nonce+submitter collide in same timestamp", async function () {
+            const root1        = ethers.keccak256(ethers.toUtf8Bytes("root-dup-1"));
+            const arweave1     = makeArweaveTxId("dup-1");
+            const sharedNonce  = ethers.keccak256(ethers.toUtf8Bytes("shared-nonce-collision"));
+
+            const tx1      = await provenance.connect(committer).anchorBatch(
+                root1, arweave1, 5, submitterActorId, sharedNonce, "E12_Production"
+            );
+            const receipt1 = await tx1.wait();
+            const block1   = await ethers.provider.getBlock(receipt1.blockNumber);
+
+            // Force the next block to carry the same timestamp as block1
+            await ethers.provider.send("evm_setNextBlockTimestamp", [block1.timestamp]);
+
+            const root2    = ethers.keccak256(ethers.toUtf8Bytes("root-dup-2"));
+            const arweave2 = makeArweaveTxId("dup-2");
+
+            await expect(
+                provenance.connect(committer).anchorBatch(
+                    root2, arweave2, 5, submitterActorId, sharedNonce, "E12_Production"
+                )
+            ).to.be.revertedWithCustomError(provenance, "BatchAlreadyExists");
         });
     });
 
@@ -619,11 +664,24 @@ describe("AtsurProvenance", function () {
     // ─────────────────────────────────────────────
 
     describe("Pause", function () {
-        it("pauser can pause and unpause", async function () {
+        it("pauser can pause; admin can unpause", async function () {
             await provenance.connect(pauser).pauseBatchCommits();
             expect(await provenance.paused()).to.be.true;
 
-            await provenance.connect(pauser).unpauseBatchCommits();
+            await provenance.connect(admin).unpauseBatchCommits();
+            expect(await provenance.paused()).to.be.false;
+        });
+
+        // L-2 (SEV-008)
+        it("pauser cannot unpause; only admin can", async function () {
+            await provenance.connect(pauser).pauseBatchCommits();
+            expect(await provenance.paused()).to.be.true;
+
+            await expect(
+                provenance.connect(pauser).unpauseBatchCommits()
+            ).to.be.revertedWithCustomError(provenance, "AccessControlUnauthorizedAccount");
+
+            await provenance.connect(admin).unpauseBatchCommits();
             expect(await provenance.paused()).to.be.false;
         });
 
@@ -663,6 +721,13 @@ describe("AtsurProvenance", function () {
             await expect(
                 upgrades.upgradeProxy(await provenance.getAddress(), Factory)
             ).to.be.reverted;
+        });
+
+        // L-6 (SEV-009)
+        it("reverts NotAContract when upgrading to an EOA address", async function () {
+            await expect(
+                provenance.connect(admin).upgradeToAndCall(stranger.address, "0x")
+            ).to.be.revertedWithCustomError(provenance, "NotAContract");
         });
     });
 });

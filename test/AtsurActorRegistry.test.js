@@ -124,7 +124,7 @@ describe("AtsurActorRegistry", function () {
                 .to.emit(registry, "ActorRegistered")
                 .withArgs(actorId, ActorType.E21_Person, 0 /* KYC_Verified */, "smile_id", user.address, anyValue);
 
-            expect(await registry.actorExists(actorId)).to.be.true;
+            expect(await registry.isActorRegistered(actorId)).to.be.true;
             const actor = await registry.getActor(actorId);
             expect(actor.actorType).to.equal(ActorType.E21_Person);
             expect(actor.custodialWallet).to.equal(user.address);
@@ -191,6 +191,15 @@ describe("AtsurActorRegistry", function () {
                     actorId, ActorType.E21_Person, commitment, "", user.address
                 )
             ).to.be.revertedWithCustomError(registry, "InvalidKycProvider");
+        });
+
+        // SEV-004 fix
+        it("reverts InvalidActorId for bytes32(0) actorId", async function () {
+            await expect(
+                registry.connect(operator).registerActor(
+                    ethers.ZeroHash, ActorType.E21_Person, commitment, "smile_id", user.address
+                )
+            ).to.be.revertedWithCustomError(registry, "InvalidActorId");
         });
     });
 
@@ -331,34 +340,39 @@ describe("AtsurActorRegistry", function () {
             );
         });
 
-        it("returns true for correct data", async function () {
-            const result = await registry.verifyKycCommitment(
-                actorId, "smile_id", providerUserId, uuid, SALT
-            );
+        // SEV-001: tests now pass the pre-computed commitment hash — salt stays off-chain
+        it("returns true for correct commitment", async function () {
+            const commitment = makeCommitment("smile_id", providerUserId, uuid, SALT);
+            const result     = await registry.verifyKycCommitment(actorId, commitment);
             expect(result).to.be.true;
         });
 
-        it("returns false for wrong salt", async function () {
-            const wrongSalt = ethers.keccak256(ethers.toUtf8Bytes("wrong-salt"));
-            const result    = await registry.verifyKycCommitment(
-                actorId, "smile_id", providerUserId, uuid, wrongSalt
-            );
+        it("returns false for wrong salt (wrong commitment)", async function () {
+            const wrongSalt  = ethers.keccak256(ethers.toUtf8Bytes("wrong-salt"));
+            const commitment = makeCommitment("smile_id", providerUserId, uuid, wrongSalt);
+            const result     = await registry.verifyKycCommitment(actorId, commitment);
             expect(result).to.be.false;
         });
 
-        it("returns false for wrong provider user ID", async function () {
-            const result = await registry.verifyKycCommitment(
-                actorId, "smile_id", "wrong-user-id", uuid, SALT
-            );
+        it("returns false for wrong provider user ID (wrong commitment)", async function () {
+            const commitment = makeCommitment("smile_id", "wrong-user-id", uuid, SALT);
+            const result     = await registry.verifyKycCommitment(actorId, commitment);
             expect(result).to.be.false;
         });
 
         it("returns false if actor is suspended", async function () {
             await registry.connect(operator).setActorStatus(actorId, ActorStatus.Suspended);
-            const result = await registry.verifyKycCommitment(
-                actorId, "smile_id", providerUserId, uuid, SALT
-            );
+            const commitment = makeCommitment("smile_id", providerUserId, uuid, SALT);
+            const result     = await registry.verifyKycCommitment(actorId, commitment);
             expect(result).to.be.false;
+        });
+
+        it("reverts ActorNotFound for non-existent actorId", async function () {
+            const unknownId  = ethers.keccak256(ethers.toUtf8Bytes("nobody-uuid"));
+            const commitment = makeCommitment("smile_id", "uid", "nobody-uuid", SALT);
+            await expect(
+                registry.verifyKycCommitment(unknownId, commitment)
+            ).to.be.revertedWithCustomError(registry, "ActorNotFound");
         });
     });
 
@@ -472,6 +486,37 @@ describe("AtsurActorRegistry", function () {
                 registry.connect(institution).revokeVerifier(institutionActorId, verifierId)
             ).to.not.be.reverted;
         });
+
+        // M-10 (SEV-004)
+        it("delegateVerifier: reverts InvalidActorId for bytes32(0) verifierId", async function () {
+            await expect(
+                registry.connect(operator).delegateVerifier(institutionActorId, ethers.ZeroHash, false, 0)
+            ).to.be.revertedWithCustomError(registry, "InvalidActorId");
+        });
+
+        // M-17 (SEV-005)
+        it("delegateVerifier: reverts VerifierPermanentlyRevoked after revocation", async function () {
+            const root2 = makeVerifierId("verifier-uuid-2");
+
+            // Delegate and revoke
+            await registry.connect(operator).delegateVerifier(institutionActorId, verifierId, false, 0);
+            await registry.connect(operator).revokeVerifier(institutionActorId, verifierId);
+            expect(await registry.revokedVerifiers(verifierId)).to.be.true;
+
+            // Attempt to re-delegate the permanently revoked verifierId
+            await expect(
+                registry.connect(operator).delegateVerifier(institutionActorId, verifierId, false, 0)
+            ).to.be.revertedWithCustomError(registry, "VerifierPermanentlyRevoked");
+
+            // Admin can clear the revocation flag
+            await registry.connect(admin).clearVerifierRevocation(verifierId);
+            expect(await registry.revokedVerifiers(verifierId)).to.be.false;
+
+            // Re-delegation now succeeds
+            await expect(
+                registry.connect(operator).delegateVerifier(institutionActorId, verifierId, false, 0)
+            ).to.not.be.reverted;
+        });
     });
 
     // ─────────────────────────────────────────────
@@ -525,13 +570,14 @@ describe("AtsurActorRegistry", function () {
                 actorId, ActorType.E21_Person, commitment, "smile_id", user.address
             );
             const actor = await registry.getActorByWallet(user.address);
-            expect(actor.actorId).to.equal(actorId);
+            expect(actor.custodialWallet).to.equal(user.address);
         });
 
-        it("reverts for unmapped wallet", async function () {
+        it("reverts WalletNotMapped for unmapped wallet", async function () {
             await expect(
                 registry.getActorByWallet(stranger.address)
-            ).to.be.revertedWithCustomError(registry, "ActorNotFound");
+            ).to.be.revertedWithCustomError(registry, "WalletNotMapped")
+             .withArgs(stranger.address);
         });
     });
 
@@ -551,6 +597,14 @@ describe("AtsurActorRegistry", function () {
             await expect(
                 upgrades.upgradeProxy(await registry.getAddress(), Factory)
             ).to.be.reverted;
+        });
+
+        // L-6 (SEV-009)
+        it("reverts NotAContract when upgrading to an EOA address", async function () {
+            const eoaAddress = stranger.address;
+            await expect(
+                registry.connect(admin).upgradeToAndCall(eoaAddress, "0x")
+            ).to.be.revertedWithCustomError(registry, "NotAContract");
         });
     });
 });

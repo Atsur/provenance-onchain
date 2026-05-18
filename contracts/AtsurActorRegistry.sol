@@ -8,6 +8,8 @@ import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol"
  * @title AtsurActorRegistry
  * @notice Canonical on-chain identity registry for all actors in the Atsur provenance system.
  * @dev UUPS upgradeable. Admin = multisig (DEFAULT_ADMIN_ROLE). Operator = hot wallet (OPERATOR_ROLE).
+ *      Upgrades are gated by UPGRADER_ROLE, which should be held by a TimelockController — see
+ *      scripts/setupTimelock.js. DEFAULT_ADMIN_ROLE can grant/revoke UPGRADER_ROLE at any time.
  *
  * DESIGN PRINCIPLES:
  * - Atsur platform UUIDs are the canonical actor identity. KYC providers (Smile ID, Persona, etc.)
@@ -39,7 +41,10 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
     // ─────────────────────────────────────────────
 
     /// @notice Hot wallet for routine operations (registerActor, updateKycCommitment, etc.)
-    bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
+    bytes32 public constant OPERATOR_ROLE  = keccak256("OPERATOR_ROLE");
+
+    /// @notice Authorises contract upgrades — should be held by a TimelockController, not the admin directly.
+    bytes32 public constant UPGRADER_ROLE  = keccak256("UPGRADER_ROLE");
 
     // ─────────────────────────────────────────────
     // ENUMS
@@ -55,17 +60,16 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
 
     /**
      * @dev Core actor record. actorId = keccak256(atsur_uuid).
+     *      Existence is determined by registeredAt != 0 (set on registration, never reset).
      *
      * Slot layout:
-     *   0 : actorId                (bytes32, 32)
-     *   1 : kycCommitment          (bytes32, 32)
-     *   2 : delegatingInstitutionId(bytes32, 32)
-     *   3 : custodialWallet (20) + registeredAt (6) + actorType (1) + tier (1) + status (1) = 29
-     *   4 : selfCustodialWallet (20) + updatedAt (6) = 26
-     *   5+: kycProvider            (string, dynamic)
+     *   0 : kycCommitment          (bytes32, 32)
+     *   1 : delegatingInstitutionId(bytes32, 32)
+     *   2 : custodialWallet (20) + registeredAt (6) + actorType (1) + tier (1) + status (1) = 29
+     *   3 : selfCustodialWallet (20) + updatedAt (6) = 26
+     *   4+: kycProvider            (string, dynamic)
      */
     struct Actor {
-        bytes32     actorId;
         bytes32     kycCommitment;
         bytes32     delegatingInstitutionId;
         address     custodialWallet;
@@ -134,10 +138,10 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
     /// @notice verifierId → institutionActorId (reverse lookup)
     mapping(bytes32 => bytes32)                                public verifierToInstitution;
 
-    /// @notice actorId existence check (cheaper than reading full Actor struct)
-    mapping(bytes32 => bool)                                   public actorExists;
+    /// @notice verifierId → permanently revoked (cannot be re-delegated after revocation)
+    mapping(bytes32 => bool)                                   public revokedVerifiers;
 
-    /// @dev Storage gap — reserve 50 slots for future upgrades
+    /// @dev Storage gap — 50 slots (actorExists removed, 1 consumed by revokedVerifiers)
     uint256[50] private __gap;
 
     // ─────────────────────────────────────────────
@@ -198,8 +202,8 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
     /**
      * @notice Emitted when a verifier is delegated without training certification.
      * @dev Backend listens for this to track pending training requirements.
-     *      TODO: Wire to Atsur training course completion webhook
-     *            (ActorRegistryService.certifyVerifierTraining).
+     *      Training certification must be triggered by registry-cloud's
+     *      ActorRegistryService.certifyVerifierTraining() webhook on training completion.
      */
     event VerifierTrainingPending(
         bytes32 indexed institutionActorId,
@@ -211,6 +215,7 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
     // ERRORS
     // ─────────────────────────────────────────────
 
+    error InvalidActorId();
     error ActorAlreadyRegistered(bytes32 actorId);
     error ActorNotFound(bytes32 actorId);
     error ActorNotActive(bytes32 actorId);
@@ -226,7 +231,10 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
     error VerifierAlreadyDelegatedElsewhere(bytes32 verifierId);
     error VerifierNotActive(bytes32 verifierId);
     error VerifierAlreadyCertified(bytes32 verifierId);
+    error VerifierPermanentlyRevoked(bytes32 verifierId);
     error ZeroAddress();
+    error NotAContract(address addr);
+    error WalletNotMapped(address wallet);
 
     // ─────────────────────────────────────────────
     // MODIFIERS
@@ -250,12 +258,12 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
     }
 
     modifier actorMustExist(bytes32 actorId) {
-        if (!actorExists[actorId]) revert ActorNotFound(actorId);
+        if (actors[actorId].registeredAt == 0) revert ActorNotFound(actorId);
         _;
     }
 
     modifier actorMustBeActive(bytes32 actorId) {
-        if (!actorExists[actorId] || actors[actorId].status != ActorStatus.Active) {
+        if (actors[actorId].registeredAt == 0 || actors[actorId].status != ActorStatus.Active) {
             revert ActorNotActive(actorId);
         }
         _;
@@ -272,13 +280,16 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
 
     /**
      * @notice Initialise the registry.
-     * @param admin    Multisig address — granted DEFAULT_ADMIN_ROLE (upgrade + admin authority).
+     * @param admin    Multisig address — granted DEFAULT_ADMIN_ROLE (admin authority) and
+     *                 UPGRADER_ROLE (upgrade authority). Transfer UPGRADER_ROLE to a
+     *                 TimelockController via setupTimelock.js before mainnet use.
      * @param operator Hot wallet address — granted OPERATOR_ROLE (routine operations).
      */
     function initialize(address admin, address operator) public initializer {
         if (admin == address(0) || operator == address(0)) revert ZeroAddress();
         __AccessControl_init();
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(UPGRADER_ROLE, admin);
         _grantRole(OPERATOR_ROLE, operator);
     }
 
@@ -303,13 +314,13 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
         string calldata kycProvider,
         address         custodialWallet
     ) external onlyAtsur {
-        if (actorExists[actorId])                          revert ActorAlreadyRegistered(actorId);
+        if (actorId == bytes32(0))                         revert InvalidActorId();
+        if (actors[actorId].registeredAt != 0)             revert ActorAlreadyRegistered(actorId);
         if (custodialWallet == address(0))                 revert InvalidWallet();
         if (walletToActor[custodialWallet] != bytes32(0)) revert WalletAlreadyMapped(custodialWallet);
         if (bytes(kycProvider).length == 0)               revert InvalidKycProvider();
 
         actors[actorId] = Actor({
-            actorId:                  actorId,
             kycCommitment:            kycCommitment,
             delegatingInstitutionId:  bytes32(0),
             custodialWallet:          custodialWallet,
@@ -323,7 +334,6 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
         });
 
         walletToActor[custodialWallet] = actorId;
-        actorExists[actorId]           = true;
 
         emit ActorRegistered(actorId, actorType, ActorTier.KYC_Verified, kycProvider, custodialWallet, block.timestamp);
     }
@@ -336,6 +346,11 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
      * @notice Link a self-custodial wallet to an existing actor.
      *         All historical provenance remains valid via actorId.
      *         Both wallets remain active and map to the same actorId.
+     *
+     * @dev TRUST ASSUMPTION: the operator (onlyAtsur) fully controls the nonce and
+     *      therefore can compute a valid linkCommitment for any newWallet without proof of
+     *      that wallet's consent. ECDSA signature verification from newWallet is deferred
+     *      to a future upgrade. Do not expose this function to untrusted operators.
      *
      * @param actorId        The actor linking their wallet
      * @param newWallet      The self-custodial wallet (MetaMask, etc.)
@@ -415,12 +430,14 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
         bool    trainingCertified,
         uint48  certifiedAt
     ) external onlyInstitutionOrAtsur(institutionActorId) actorMustBeActive(institutionActorId) {
+        if (verifierId == bytes32(0))                                    revert InvalidActorId();
         if (actors[institutionActorId].actorType == ActorType.E21_Person) {
             revert OnlyGroupsOrLegalBodiesCanDelegate();
         }
         if (verifierDelegations[institutionActorId][verifierId].active) {
             revert VerifierAlreadyActive(verifierId);
         }
+        if (revokedVerifiers[verifierId])                   revert VerifierPermanentlyRevoked(verifierId);
         if (verifierToInstitution[verifierId] != bytes32(0)) {
             revert VerifierAlreadyDelegatedElsewhere(verifierId);
         }
@@ -449,9 +466,8 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
      * @notice Record training certification for a delegated verifier.
      *         Only Atsur can call — institutions cannot self-certify their verifiers.
      *         Until this is called, isActiveVerifier() returns false even if delegated.
-     *
-     *         TODO: Wire to Atsur training course completion webhook.
-     *               See ActorRegistryService.certifyVerifierTraining().
+     * @dev Training certification must be triggered by registry-cloud's
+     *      ActorRegistryService.certifyVerifierTraining() webhook on training completion.
      */
     function certifyVerifierTraining(
         bytes32 institutionActorId,
@@ -480,10 +496,20 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
         VerifierDelegation storage d = verifierDelegations[institutionActorId][verifierId];
         if (!d.active) revert VerifierNotActive(verifierId);
 
-        d.active = false;
+        d.active                          = false;
         verifierToInstitution[verifierId] = bytes32(0);
+        revokedVerifiers[verifierId]      = true;
 
         emit VerifierRevoked(institutionActorId, verifierId, msg.sender, block.timestamp);
+    }
+
+    /**
+     * @notice Clear a verifier's permanent revocation flag, allowing re-delegation.
+     *         Only DEFAULT_ADMIN_ROLE (multisig) can call — requires human review before use.
+     *         The verifier still needs to be re-delegated via delegateVerifier() afterward.
+     */
+    function clearVerifierRevocation(bytes32 verifierId) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        revokedVerifiers[verifierId] = false;
     }
 
     // ─────────────────────────────────────────────
@@ -509,8 +535,19 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
 
     function getActorByWallet(address wallet) external view returns (Actor memory) {
         bytes32 actorId = walletToActor[wallet];
-        if (actorId == bytes32(0)) revert ActorNotFound(bytes32(0));
+        if (actorId == bytes32(0)) revert WalletNotMapped(wallet);
         return actors[actorId];
+    }
+
+    /// @notice Returns true if the actor is registered (existence check, ignores status).
+    function isActorRegistered(bytes32 actorId) external view returns (bool) {
+        return actors[actorId].registeredAt != 0;
+    }
+
+    /// @notice Returns true if the actor is registered and currently Active.
+    function isActorActive(bytes32 actorId) external view returns (bool) {
+        return actors[actorId].registeredAt != 0 &&
+               actors[actorId].status == ActorStatus.Active;
     }
 
     /// @notice Returns true only if the verifier is both active AND training-certified.
@@ -538,26 +575,24 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
         return walletLinks[actorId];
     }
 
+    // BREAKING CHANGE (audit SEV-001): salt parameter removed.
+    // registry-cloud: update ActorRegistryService.verifyKycCommitment() call site.
+    // Third-party callers: pass actors[actorId].kycCommitment to compare off-chain.
+
     /**
-     * @notice Verify a KYC commitment on-chain without exposing personal data.
-     *         Used by third parties to confirm an actor was verified by a specific provider.
-     *         Caller must supply providerUserId, atsurUuid, and salt (all kept off-chain normally).
+     * @notice Verify that a claimed KYC commitment matches the actor's on-chain record.
+     *         Callers should compute keccak256(providerName, providerUserId, atsurUuid, salt)
+     *         off-chain and pass the resulting hash here — the salt never touches the chain.
      *
-     * @param actorId        The actor to verify
-     * @param providerName   e.g. "smile_id"
-     * @param providerUserId The provider's user_id for this actor
-     * @param atsurUuid      The Atsur platform UUID
-     * @param salt           Secret salt held by Atsur backend
+     * @param actorId           The actor to verify
+     * @param claimedCommitment keccak256(abi.encodePacked(providerName, providerUserId, atsurUuid, salt))
+     *                          computed off-chain by the verifier
      */
     function verifyKycCommitment(
-        bytes32         actorId,
-        string calldata providerName,
-        string calldata providerUserId,
-        string calldata atsurUuid,
-        bytes32         salt
+        bytes32 actorId,
+        bytes32 claimedCommitment
     ) external view actorMustExist(actorId) returns (bool) {
-        bytes32 computed = keccak256(abi.encodePacked(providerName, providerUserId, atsurUuid, salt));
-        return computed == actors[actorId].kycCommitment &&
+        return claimedCommitment == actors[actorId].kycCommitment &&
                actors[actorId].status == ActorStatus.Active;
     }
 
@@ -569,6 +604,9 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
     // UUPS — upgrade authorisation
     // ─────────────────────────────────────────────
 
-    /// @dev Only DEFAULT_ADMIN_ROLE (multisig) can authorise upgrades.
-    function _authorizeUpgrade(address /*newImplementation*/) internal override onlyRole(DEFAULT_ADMIN_ROLE) {}
+    /// @dev Only UPGRADER_ROLE (TimelockController) can authorise upgrades.
+    ///      DEFAULT_ADMIN_ROLE can grant UPGRADER_ROLE at any time if the timelock needs to change.
+    function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {
+        if (newImplementation.code.length == 0) revert NotAContract(newImplementation);
+    }
 }
