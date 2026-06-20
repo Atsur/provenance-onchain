@@ -30,10 +30,10 @@ Legend: [ ] = pending · [x] = done · [DEFERRED] = intentionally skipped
 - [x] M-5: Run npx hardhat test + forge test — all pass (89 HH + 65 Foundry)
 
 ### SEV-004 — registerActor: reject bytes32(0) actorId (AtsurActorRegistry.sol)
-- [ ] M-6: Declare `error InvalidActorId()` in the errors section
-- [ ] M-7: Add guard at the top of registerActor (before actorExists check):
+- [x] M-6: Declare `error InvalidActorId()` in the errors section
+- [x] M-7: Add guard at the top of registerActor (before actorExists check):
          `if (actorId == bytes32(0)) revert InvalidActorId();`
-- [ ] M-8: Also add the same guard to delegateVerifier for verifierId:
+- [x] M-8: Also add the same guard to delegateVerifier for verifierId:
          `if (verifierId == bytes32(0)) revert InvalidActorId();`
          (Ask the user if a more specific error name like InvalidVerifierId is preferred.)
 - [x] M-9: Add Hardhat test: registerActor(bytes32(0), ...) reverts InvalidActorId
@@ -41,15 +41,15 @@ Legend: [ ] = pending · [x] = done · [DEFERRED] = intentionally skipped
 - [x] M-11: Run npx hardhat test + forge test — all pass
 
 ### SEV-005 — revokeVerifier: prevent re-delegation after revocation (AtsurActorRegistry.sol)
-- [ ] M-12: Add storage variable: `mapping(bytes32 => bool) public revokedVerifiers;`
+- [x] M-12: Add storage variable: `mapping(bytes32 => bool) public revokedVerifiers;`
             Place it immediately after the `verifierToInstitution` mapping
             (before __gap to preserve gap sizing — reduce __gap from [50] to [49])
-- [ ] M-13: Declare `error VerifierPermanentlyRevoked(bytes32 verifierId)` in errors
-- [ ] M-14: In revokeVerifier(), after setting d.active = false, add:
+- [x] M-13: Declare `error VerifierPermanentlyRevoked(bytes32 verifierId)` in errors
+- [x] M-14: In revokeVerifier(), after setting d.active = false, add:
           `revokedVerifiers[verifierId] = true;`
-- [ ] M-15: In delegateVerifier(), after the VerifierAlreadyDelegatedElsewhere check, add:
+- [x] M-15: In delegateVerifier(), after the VerifierAlreadyDelegatedElsewhere check, add:
           `if (revokedVerifiers[verifierId]) revert VerifierPermanentlyRevoked(verifierId);`
-- [ ] M-16: Ask user: should Atsur (admin) be able to override the permanent revocation
+- [x] M-16: Ask user: should Atsur (admin) be able to override the permanent revocation
             and re-delegate a verifier despite the flag? If yes, add an admin-only
             `clearVerifierRevocation(bytes32 verifierId)` function. Do not implement
             without a clear answer.
@@ -182,3 +182,7 @@ Legend: [ ] = pending · [x] = done · [DEFERRED] = intentionally skipped
               SEV-007 DEFERRED (NatSpec only, no code change). SEV-014+015 applied
               (clean testnet confirmed). Only remaining item: SEV-016 isActorRegistered
               added as bonus. All [x] complete.
+- 2026-06-20: Corrected stale checkboxes for M-6 through M-16 (SEV-004/SEV-005) — the
+              corresponding code (InvalidActorId guards, revokedVerifiers mapping,
+              VerifierPermanentlyRevoked, clearVerifierRevocation) was already implemented
+              and tested; the checklist simply hadn't been updated to reflect it.

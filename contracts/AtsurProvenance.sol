@@ -14,7 +14,8 @@ import "./AtsurActorRegistry.sol";
  * @notice On-chain provenance anchoring for the Atsur art ecosystem.
  * @dev UUPS upgradeable. Admin = multisig (DEFAULT_ADMIN_ROLE). Committer = hot wallet (BATCH_COMMITTER_ROLE).
  *      Upgrades are gated by UPGRADER_ROLE, which should be held by a TimelockController — see
- *      scripts/setupTimelock.js. DEFAULT_ADMIN_ROLE can grant/revoke UPGRADER_ROLE at any time.
+ *      scripts/setupTimelock.js. UPGRADER_ROLE is self-administered (see initialize()) — only a
+ *      current UPGRADER_ROLE holder can grant/revoke it; DEFAULT_ADMIN_ROLE cannot.
  *
  * ARCHITECTURE:
  * - All provenance events are CIDOC-CRM JSON-LD documents stored on Arweave.
@@ -254,6 +255,10 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(UPGRADER_ROLE, admin);
+        // UPGRADER_ROLE is self-administered: only a current UPGRADER_ROLE holder (the
+        // TimelockController, once transferred) can grant/revoke it. DEFAULT_ADMIN_ROLE
+        // (the Safe) cannot re-grant itself upgrade authority and bypass the timelock.
+        _setRoleAdmin(UPGRADER_ROLE, UPGRADER_ROLE);
         emit BatchSizeLimitsUpdated(initialMin, initialMax);
     }
 
@@ -591,7 +596,8 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
     // ─────────────────────────────────────────────
 
     /// @dev Only UPGRADER_ROLE (TimelockController) can authorise upgrades.
-    ///      DEFAULT_ADMIN_ROLE can grant UPGRADER_ROLE at any time if the timelock needs to change.
+    ///      UPGRADER_ROLE is self-administered — DEFAULT_ADMIN_ROLE cannot grant it to itself or
+    ///      anyone else; only a current UPGRADER_ROLE holder can transfer it.
     function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {
         if (newImplementation.code.length == 0) revert NotAContract(newImplementation);
     }

@@ -9,7 +9,8 @@ import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol"
  * @notice Canonical on-chain identity registry for all actors in the Atsur provenance system.
  * @dev UUPS upgradeable. Admin = multisig (DEFAULT_ADMIN_ROLE). Operator = hot wallet (OPERATOR_ROLE).
  *      Upgrades are gated by UPGRADER_ROLE, which should be held by a TimelockController — see
- *      scripts/setupTimelock.js. DEFAULT_ADMIN_ROLE can grant/revoke UPGRADER_ROLE at any time.
+ *      scripts/setupTimelock.js. UPGRADER_ROLE is self-administered (see initialize()) — only a
+ *      current UPGRADER_ROLE holder can grant/revoke it; DEFAULT_ADMIN_ROLE cannot.
  *
  * DESIGN PRINCIPLES:
  * - Atsur platform UUIDs are the canonical actor identity. KYC providers (Smile ID, Persona, etc.)
@@ -290,6 +291,10 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
         __AccessControl_init();
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(UPGRADER_ROLE, admin);
+        // UPGRADER_ROLE is self-administered: only a current UPGRADER_ROLE holder (the
+        // TimelockController, once transferred) can grant/revoke it. DEFAULT_ADMIN_ROLE
+        // (the Safe) cannot re-grant itself upgrade authority and bypass the timelock.
+        _setRoleAdmin(UPGRADER_ROLE, UPGRADER_ROLE);
         _grantRole(OPERATOR_ROLE, operator);
     }
 
@@ -605,7 +610,8 @@ contract AtsurActorRegistry is UUPSUpgradeable, AccessControlUpgradeable {
     // ─────────────────────────────────────────────
 
     /// @dev Only UPGRADER_ROLE (TimelockController) can authorise upgrades.
-    ///      DEFAULT_ADMIN_ROLE can grant UPGRADER_ROLE at any time if the timelock needs to change.
+    ///      UPGRADER_ROLE is self-administered — DEFAULT_ADMIN_ROLE cannot grant it to itself or
+    ///      anyone else; only a current UPGRADER_ROLE holder can transfer it.
     function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {
         if (newImplementation.code.length == 0) revert NotAContract(newImplementation);
     }

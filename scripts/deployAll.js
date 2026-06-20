@@ -15,13 +15,29 @@
  *   TIMELOCK_DELAY         Upgrade delay in seconds — deploys TimelockController and grants UPGRADER_ROLE
  *                          to it (optional; recommended: 86400 for testnet, 172800+ for mainnet).
  *                          If not set, UPGRADER_ROLE stays with the admin (less safe).
+ *   CONFIRM_MAINNET        Must equal "I_UNDERSTAND_THIS_IS_MAINNET" to deploy to a known mainnet
+ *                          chain ID (Polygon 137, Lisk 1135).
  */
 
 const { ethers, upgrades } = require("hardhat");
 require("dotenv").config();
 const { syncDeployment } = require("./syncDeployment");
 
+// Known mainnet chain IDs — deploying here requires CONFIRM_MAINNET (see _checkMainnetConfirmation).
+const MAINNET_CHAIN_IDS = [137n, 1135n]; // Polygon, Lisk
+
+async function _checkMainnetConfirmation() {
+    const network = await ethers.provider.getNetwork();
+    if (MAINNET_CHAIN_IDS.includes(network.chainId)) {
+        if (process.env.CONFIRM_MAINNET !== "I_UNDERSTAND_THIS_IS_MAINNET") {
+            throw new Error("Set CONFIRM_MAINNET=I_UNDERSTAND_THIS_IS_MAINNET to deploy to mainnet");
+        }
+    }
+}
+
 async function main() {
+    await _checkMainnetConfirmation();
+
     const [deployer] = await ethers.getSigners();
 
     const operator      = process.env.OPERATOR_ADDRESS
@@ -122,6 +138,12 @@ async function main() {
     // ─── 5. Transfer admin to multisig (if set) ─────────────────────
     if (multisig) {
         console.log("\n[5] Transferring DEFAULT_ADMIN_ROLE to multisig...");
+
+        const multisigCode = await ethers.provider.getCode(multisig);
+        if (multisigCode === "0x") {
+            throw new Error("MULTISIG_ADDRESS is an EOA, not a contract. Deploy a Gnosis Safe first.");
+        }
+
         const DEFAULT_ADMIN_ROLE = await registry.DEFAULT_ADMIN_ROLE();
 
         tx = await registry.grantRole(DEFAULT_ADMIN_ROLE, multisig);

@@ -48,9 +48,9 @@ module.exports = {
       accounts: liveAccounts,
       gasPrice: "auto",
     },
-    polygonMumbai: {
-      url: process.env.POLYGON_MUMBAI_RPC_URL || "https://rpc-mumbai.maticvigil.com",
-      chainId: 80001,
+    polygonAmoy: {
+      url: process.env.POLYGON_AMOY_RPC_URL || "https://rpc-amoy.polygon.technology",
+      chainId: 80002,
       accounts: liveAccounts,
       gasPrice: "auto",
     },
@@ -64,7 +64,7 @@ module.exports = {
   etherscan: {
     apiKey: {
       liskSepolia: process.env.LISK_SEPOLIA_API_KEY || "",
-      polygonMumbai: process.env.POLYGONSCAN_API_KEY || "",
+      polygonAmoy: process.env.POLYGONSCAN_API_KEY || "",
       polygon: process.env.POLYGONSCAN_API_KEY || "",
     },
     customChains: [
