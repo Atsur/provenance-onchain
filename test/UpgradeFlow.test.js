@@ -72,9 +72,9 @@ describe("Upgrade flow (TimelockController + self-administered UPGRADER_ROLE)", 
             await provenance.connect(deployer).grantRole(await provenance.BATCH_COMMITTER_ROLE(), deployer.address);
             const merkleRoot  = ethers.keccak256(ethers.toUtf8Bytes("seed-root"));
             const arweaveTxId = ethers.keccak256(ethers.toUtf8Bytes("seed-arweave"));
-            const nonce       = ethers.keccak256(ethers.toUtf8Bytes("seed-nonce"));
+            const salt        = ethers.keccak256(ethers.toUtf8Bytes("seed-nonce"));
             const anchorTx    = await provenance.connect(deployer).anchorBatch(
-                merkleRoot, arweaveTxId, 1, submitterActorId, nonce, "E12_Production"
+                merkleRoot, arweaveTxId, 1, submitterActorId, salt, "E12_Production", 0
             );
             const receipt = await anchorTx.wait();
             const log = receipt.logs

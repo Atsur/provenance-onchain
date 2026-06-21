@@ -125,8 +125,9 @@ contract AtsurProvenanceTest is Test {
     }
 
     function _anchorSingleLeaf(bytes32 leaf) internal returns (bytes32 batchId) {
-        bytes32 nonce   = keccak256(abi.encodePacked(block.timestamp, leaf));
-        bytes32 arweave = keccak256(abi.encodePacked("arweave", leaf, nonce));
+        bytes32 salt    = keccak256(abi.encodePacked(block.timestamp, leaf));
+        bytes32 arweave = keccak256(abi.encodePacked("arweave", leaf, salt));
+        uint256 nonce   = provenance.getSubmitterNonce(committer);
 
         vm.prank(committer);
         batchId = provenance.anchorBatch(
@@ -134,8 +135,9 @@ contract AtsurProvenanceTest is Test {
             arweave,
             1,
             submitterActorId,
-            nonce,
-            "E12_Production"
+            salt,
+            "E12_Production",
+            nonce
         );
     }
 
@@ -144,12 +146,13 @@ contract AtsurProvenanceTest is Test {
         returns (bytes32 batchId, bytes32 root)
     {
         (root, , ) = _buildTwoLeafTree(leafA, leafB);
-        bytes32 nonce   = keccak256(abi.encodePacked(block.timestamp, leafA, leafB));
-        bytes32 arweave = keccak256(abi.encodePacked("arweave", root, nonce));
+        bytes32 salt    = keccak256(abi.encodePacked(block.timestamp, leafA, leafB));
+        bytes32 arweave = keccak256(abi.encodePacked("arweave", root, salt));
+        uint256 nonce   = provenance.getSubmitterNonce(committer);
 
         vm.prank(committer);
         batchId = provenance.anchorBatch(
-            root, arweave, 2, submitterActorId, nonce, "E12_Production"
+            root, arweave, 2, submitterActorId, salt, "E12_Production", nonce
         );
     }
 
@@ -189,16 +192,19 @@ contract AtsurProvenanceTest is Test {
     function test_anchorBatch_success_emitsEvent() public {
         bytes32 root    = keccak256("root-001");
         bytes32 arweave = keccak256("arweave-001");
-        bytes32 nonce   = keccak256("nonce-001");
+        bytes32 salt    = keccak256("nonce-001");
 
         vm.expectEmit(false, false, true, false, address(provenance));
-        emit AtsurProvenance.BatchAnchored(bytes32(0), root, arweave, submitterActorId, 5, block.timestamp);
+        emit AtsurProvenance.BatchAnchored(
+            bytes32(0), root, arweave, 5, "E12_Production", committer, submitterActorId, 0, block.timestamp
+        );
 
         vm.prank(committer);
-        bytes32 batchId = provenance.anchorBatch(root, arweave, 5, submitterActorId, nonce, "E12_Production");
+        bytes32 batchId = provenance.anchorBatch(root, arweave, 5, submitterActorId, salt, "E12_Production", 0);
 
         assertTrue(provenance.usedMerkleRoots(root));
         assertTrue(provenance.usedArweaveTxIds(arweave));
+        assertEq(provenance.getSubmitterNonce(committer), 1);
 
         AtsurProvenance.ProvenanceBatch memory batch = provenance.getBatch(batchId);
         assertEq(batch.merkleRoot, root);
@@ -210,7 +216,7 @@ contract AtsurProvenanceTest is Test {
     function test_anchorBatch_reverts_notCommitter() public {
         vm.prank(stranger);
         vm.expectRevert();
-        provenance.anchorBatch(keccak256("r"), keccak256("a"), 1, submitterActorId, keccak256("n"), "E12_Production");
+        provenance.anchorBatch(keccak256("r"), keccak256("a"), 1, submitterActorId, keccak256("n"), "E12_Production", 0);
     }
 
     function test_anchorBatch_reverts_belowMinBatchSize() public {
@@ -219,28 +225,28 @@ contract AtsurProvenanceTest is Test {
 
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.InvalidBatchSize.selector, 3, 5, 1000));
-        provenance.anchorBatch(keccak256("r"), keccak256("a"), 3, submitterActorId, keccak256("n"), "E12_Production");
+        provenance.anchorBatch(keccak256("r"), keccak256("a"), 3, submitterActorId, keccak256("n"), "E12_Production", 0);
     }
 
     function test_anchorBatch_reverts_duplicateMerkleRoot() public {
-        bytes32 root  = keccak256("dup-root");
-        bytes32 nonce = keccak256("nonce-1");
+        bytes32 root = keccak256("dup-root");
+        bytes32 salt = keccak256("nonce-1");
         vm.prank(committer);
-        provenance.anchorBatch(root, keccak256("arweave-1"), 1, submitterActorId, nonce, "E12_Production");
+        provenance.anchorBatch(root, keccak256("arweave-1"), 1, submitterActorId, salt, "E12_Production", 0);
 
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.DuplicateMerkleRoot.selector, root));
-        provenance.anchorBatch(root, keccak256("arweave-2"), 1, submitterActorId, keccak256("nonce-2"), "E12_Production");
+        provenance.anchorBatch(root, keccak256("arweave-2"), 1, submitterActorId, keccak256("nonce-2"), "E12_Production", 1);
     }
 
     function test_anchorBatch_reverts_duplicateArweaveTxId() public {
         bytes32 arweave = keccak256("dup-arweave");
         vm.prank(committer);
-        provenance.anchorBatch(keccak256("root-1"), arweave, 1, submitterActorId, keccak256("nonce-1"), "E12_Production");
+        provenance.anchorBatch(keccak256("root-1"), arweave, 1, submitterActorId, keccak256("nonce-1"), "E12_Production", 0);
 
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.DuplicateArweaveTxId.selector, arweave));
-        provenance.anchorBatch(keccak256("root-2"), arweave, 1, submitterActorId, keccak256("nonce-2"), "E12_Production");
+        provenance.anchorBatch(keccak256("root-2"), arweave, 1, submitterActorId, keccak256("nonce-2"), "E12_Production", 1);
     }
 
     function test_anchorBatch_reverts_submitterNotInRegistry() public {
@@ -248,7 +254,7 @@ contract AtsurProvenanceTest is Test {
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.SubmitterNotInRegistry.selector, unknownActor));
         provenance.anchorBatch(
-            keccak256("r"), keccak256("a"), 1, unknownActor, keccak256("n"), "E12_Production"
+            keccak256("r"), keccak256("a"), 1, unknownActor, keccak256("n"), "E12_Production", 0
         );
     }
 
@@ -262,7 +268,7 @@ contract AtsurProvenanceTest is Test {
             abi.encodeWithSelector(AtsurProvenance.SubmitterNotActive.selector, submitterActorId)
         );
         provenance.anchorBatch(
-            keccak256("r"), keccak256("a"), 1, submitterActorId, keccak256("n"), "E12_Production"
+            keccak256("r"), keccak256("a"), 1, submitterActorId, keccak256("n"), "E12_Production", 0
         );
     }
 
@@ -270,43 +276,65 @@ contract AtsurProvenanceTest is Test {
         vm.prank(committer);
         vm.expectRevert(AtsurProvenance.EmptyEventType.selector);
         provenance.anchorBatch(
-            keccak256("r"), keccak256("a"), 1, submitterActorId, keccak256("n"), ""
+            keccak256("r"), keccak256("a"), 1, submitterActorId, keccak256("n"), "", 0
         );
     }
 
     function test_anchorBatch_reverts_zeroArweaveTxId() public {
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.InvalidArweaveTxId.selector, bytes32(0)));
-        provenance.anchorBatch(keccak256("r"), bytes32(0), 1, submitterActorId, keccak256("n"), "E12_Production");
+        provenance.anchorBatch(keccak256("r"), bytes32(0), 1, submitterActorId, keccak256("n"), "E12_Production", 0);
     }
 
     // SEV-003 fix
     function test_anchorBatch_reverts_zeroMerkleRoot() public {
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.InvalidMerkleRoot.selector, bytes32(0)));
-        provenance.anchorBatch(bytes32(0), keccak256("arweave"), 1, submitterActorId, keccak256("nonce"), "E12_Production");
+        provenance.anchorBatch(bytes32(0), keccak256("arweave"), 1, submitterActorId, keccak256("nonce"), "E12_Production", 0);
     }
 
     // SEV-002 fix
     function test_anchorBatch_reverts_batchAlreadyExists() public {
-        bytes32 sharedNonce = keccak256("collision-nonce");
+        bytes32 sharedSalt = keccak256("collision-nonce");
         bytes32 root1       = keccak256("root-col-1");
         bytes32 arweave1    = keccak256("arweave-col-1");
         bytes32 root2       = keccak256("root-col-2");
         bytes32 arweave2    = keccak256("arweave-col-2");
 
-        // First anchor succeeds — batchId = keccak256(block.timestamp, submitterActorId, sharedNonce)
+        // First anchor succeeds — batchId = keccak256(block.timestamp, submitterActorId, sharedSalt)
         vm.prank(committer);
-        bytes32 batchId = provenance.anchorBatch(root1, arweave1, 1, submitterActorId, sharedNonce, "E12_Production");
+        bytes32 batchId = provenance.anchorBatch(root1, arweave1, 1, submitterActorId, sharedSalt, "E12_Production", 0);
 
-        // Compute expected batchId for the second call (same timestamp, same submitter, same nonce)
-        bytes32 expectedBatchId = keccak256(abi.encodePacked(block.timestamp, submitterActorId, sharedNonce));
+        // Compute expected batchId for the second call (same timestamp, same submitter, same salt)
+        bytes32 expectedBatchId = keccak256(abi.encodePacked(block.timestamp, submitterActorId, sharedSalt));
         assertEq(batchId, expectedBatchId);
 
-        // Second anchor in the same block with the same nonce → same batchId → revert
+        // Second anchor in the same block with the same salt → same batchId → revert
+        // (sequential nonce must advance to 1 even though the call itself reverts)
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.BatchAlreadyExists.selector, expectedBatchId));
-        provenance.anchorBatch(root2, arweave2, 1, submitterActorId, sharedNonce, "E12_Production");
+        provenance.anchorBatch(root2, arweave2, 1, submitterActorId, sharedSalt, "E12_Production", 1);
+    }
+
+    // New: Task 2 replay-protection nonce
+    function test_anchorBatch_reverts_invalidNonce() public {
+        vm.prank(committer);
+        vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.InvalidNonce.selector, 7, 0));
+        provenance.anchorBatch(keccak256("r"), keccak256("a"), 1, submitterActorId, keccak256("n"), "E12_Production", 7);
+    }
+
+    function test_getSubmitterNonce_incrementsOnlyOnSuccess() public {
+        assertEq(provenance.getSubmitterNonce(committer), 0);
+
+        vm.prank(committer);
+        provenance.anchorBatch(keccak256("r1"), keccak256("a1"), 1, submitterActorId, keccak256("n1"), "E12_Production", 0);
+        assertEq(provenance.getSubmitterNonce(committer), 1);
+
+        // Stale nonce reverts and must not advance the counter.
+        vm.prank(committer);
+        vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.InvalidNonce.selector, 0, 1));
+        provenance.anchorBatch(keccak256("r2"), keccak256("a2"), 1, submitterActorId, keccak256("n2"), "E12_Production", 0);
+        assertEq(provenance.getSubmitterNonce(committer), 1);
     }
 
     // ─────────────────────────────────────────────
@@ -425,7 +453,7 @@ contract AtsurProvenanceTest is Test {
         vm.prank(committer);
         vm.expectRevert();
         provenance.anchorBatch(
-            keccak256("r"), keccak256("a"), 1, submitterActorId, keccak256("n"), "E12_Production"
+            keccak256("r"), keccak256("a"), 1, submitterActorId, keccak256("n"), "E12_Production", 0
         );
     }
 
@@ -440,7 +468,7 @@ contract AtsurProvenanceTest is Test {
         vm.prank(committer);
         bytes32 batchId = provenance.anchorBatch(
             keccak256("r-after-unpause"), keccak256("a-after-unpause"), 1,
-            submitterActorId, keccak256("n-after-unpause"), "E12_Production"
+            submitterActorId, keccak256("n-after-unpause"), "E12_Production", 0
         );
         assertTrue(provenance.getBatch(batchId).exists);
     }
@@ -555,19 +583,19 @@ contract AtsurProvenanceTest is Test {
     function testFuzz_usedMerkleRoots_preventsDoubleAnchor(bytes32 seed) public {
         bytes32 root    = keccak256(abi.encodePacked("fuzz-root", seed));
         bytes32 arweave = keccak256(abi.encodePacked("fuzz-arweave", seed));
-        bytes32 nonce   = keccak256(abi.encodePacked("fuzz-nonce", seed));
+        bytes32 salt    = keccak256(abi.encodePacked("fuzz-nonce", seed));
 
         vm.prank(committer);
-        provenance.anchorBatch(root, arweave, 1, submitterActorId, nonce, "E12_Production");
+        provenance.anchorBatch(root, arweave, 1, submitterActorId, salt, "E12_Production", 0);
 
         assertTrue(provenance.usedMerkleRoots(root));
 
         bytes32 arweave2 = keccak256(abi.encodePacked("fuzz-arweave-2", seed));
-        bytes32 nonce2   = keccak256(abi.encodePacked("fuzz-nonce-2", seed));
+        bytes32 salt2    = keccak256(abi.encodePacked("fuzz-nonce-2", seed));
 
         vm.prank(committer);
         vm.expectRevert(abi.encodeWithSelector(AtsurProvenance.DuplicateMerkleRoot.selector, root));
-        provenance.anchorBatch(root, arweave2, 1, submitterActorId, nonce2, "E12_Production");
+        provenance.anchorBatch(root, arweave2, 1, submitterActorId, salt2, "E12_Production", 1);
     }
 
     // L-6 (SEV-009)

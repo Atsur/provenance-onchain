@@ -166,28 +166,31 @@ describe("AtsurProvenance", function () {
     // ─────────────────────────────────────────────
 
     describe("anchorBatch", function () {
-        let eventLeaf, merkleRoot, arweaveTxId, nonce;
+        let eventLeaf, merkleRoot, arweaveTxId, salt;
 
         beforeEach(function () {
             eventLeaf   = ethers.keccak256(ethers.toUtf8Bytes("cidoc-event-001"));
             merkleRoot  = ethers.keccak256(ethers.toUtf8Bytes("root-001"));
             arweaveTxId = makeArweaveTxId("tx-001");
-            nonce       = ethers.keccak256(ethers.toUtf8Bytes("nonce-1"));
+            salt        = ethers.keccak256(ethers.toUtf8Bytes("nonce-1"));
         });
 
         it("anchors a batch and emits BatchAnchored", async function () {
             await expect(
                 provenance.connect(committer).anchorBatch(
-                    merkleRoot, arweaveTxId, 5, submitterActorId, nonce, "E12_Production"
+                    merkleRoot, arweaveTxId, 5, submitterActorId, salt, "E12_Production", 0
                 )
             )
                 .to.emit(provenance, "BatchAnchored")
-                .withArgs(anyValue, merkleRoot, arweaveTxId, submitterActorId, 5, anyValue);
+                .withArgs(
+                    anyValue, merkleRoot, arweaveTxId, 5, "E12_Production",
+                    committer.address, submitterActorId, 0, anyValue
+                );
         });
 
         it("returns a deterministic batchId (keccak of timestamp+submitter+nonce)", async function () {
             const tx      = await provenance.connect(committer).anchorBatch(
-                merkleRoot, arweaveTxId, 5, submitterActorId, nonce, "E12_Production"
+                merkleRoot, arweaveTxId, 5, submitterActorId, salt, "E12_Production", 0
             );
             const receipt = await tx.wait();
             const event   = receipt.logs.find(l => l.fragment?.name === "BatchAnchored");
@@ -197,7 +200,7 @@ describe("AtsurProvenance", function () {
 
         it("marks merkleRoot and arweaveTxId as used", async function () {
             await provenance.connect(committer).anchorBatch(
-                merkleRoot, arweaveTxId, 5, submitterActorId, nonce, "E12_Production"
+                merkleRoot, arweaveTxId, 5, submitterActorId, salt, "E12_Production", 0
             );
             expect(await provenance.usedMerkleRoots(merkleRoot)).to.be.true;
             expect(await provenance.usedArweaveTxIds(arweaveTxId)).to.be.true;
@@ -206,7 +209,7 @@ describe("AtsurProvenance", function () {
         it("reverts for non-committer", async function () {
             await expect(
                 provenance.connect(stranger).anchorBatch(
-                    merkleRoot, arweaveTxId, 5, submitterActorId, nonce, "E12_Production"
+                    merkleRoot, arweaveTxId, 5, submitterActorId, salt, "E12_Production", 0
                 )
             ).to.be.revertedWithCustomError(provenance, "AccessControlUnauthorizedAccount");
         });
@@ -215,33 +218,33 @@ describe("AtsurProvenance", function () {
             await provenance.connect(admin).setBatchSizeLimits(5, 1000);
             await expect(
                 provenance.connect(committer).anchorBatch(
-                    merkleRoot, arweaveTxId, 3, submitterActorId, nonce, "E12_Production"
+                    merkleRoot, arweaveTxId, 3, submitterActorId, salt, "E12_Production", 0
                 )
             ).to.be.revertedWithCustomError(provenance, "InvalidBatchSize");
         });
 
         it("reverts with duplicate merkle root", async function () {
             await provenance.connect(committer).anchorBatch(
-                merkleRoot, arweaveTxId, 5, submitterActorId, nonce, "E12_Production"
+                merkleRoot, arweaveTxId, 5, submitterActorId, salt, "E12_Production", 0
             );
             const arweaveTxId2 = makeArweaveTxId("tx-002");
-            const nonce2       = ethers.keccak256(ethers.toUtf8Bytes("nonce-2"));
+            const salt2        = ethers.keccak256(ethers.toUtf8Bytes("nonce-2"));
             await expect(
                 provenance.connect(committer).anchorBatch(
-                    merkleRoot, arweaveTxId2, 5, submitterActorId, nonce2, "E12_Production"
+                    merkleRoot, arweaveTxId2, 5, submitterActorId, salt2, "E12_Production", 1
                 )
             ).to.be.revertedWithCustomError(provenance, "DuplicateMerkleRoot");
         });
 
         it("reverts with duplicate Arweave TX ID", async function () {
             await provenance.connect(committer).anchorBatch(
-                merkleRoot, arweaveTxId, 5, submitterActorId, nonce, "E12_Production"
+                merkleRoot, arweaveTxId, 5, submitterActorId, salt, "E12_Production", 0
             );
             const merkleRoot2 = ethers.keccak256(ethers.toUtf8Bytes("root-002"));
-            const nonce2      = ethers.keccak256(ethers.toUtf8Bytes("nonce-2"));
+            const salt2        = ethers.keccak256(ethers.toUtf8Bytes("nonce-2"));
             await expect(
                 provenance.connect(committer).anchorBatch(
-                    merkleRoot2, arweaveTxId, 5, submitterActorId, nonce2, "E12_Production"
+                    merkleRoot2, arweaveTxId, 5, submitterActorId, salt2, "E12_Production", 1
                 )
             ).to.be.revertedWithCustomError(provenance, "DuplicateArweaveTxId");
         });
@@ -250,7 +253,7 @@ describe("AtsurProvenance", function () {
             const unknownActor = makeActorId("not-registered");
             await expect(
                 provenance.connect(committer).anchorBatch(
-                    merkleRoot, arweaveTxId, 5, unknownActor, nonce, "E12_Production"
+                    merkleRoot, arweaveTxId, 5, unknownActor, salt, "E12_Production", 0
                 )
             ).to.be.revertedWithCustomError(provenance, "SubmitterNotInRegistry");
         });
@@ -261,7 +264,7 @@ describe("AtsurProvenance", function () {
             await registry.connect(admin).setActorStatus(submitterActorId, ActorStatus.Suspended);
             await expect(
                 provenance.connect(committer).anchorBatch(
-                    merkleRoot, arweaveTxId, 5, submitterActorId, nonce, "E12_Production"
+                    merkleRoot, arweaveTxId, 5, submitterActorId, salt, "E12_Production", 0
                 )
             ).to.be.revertedWithCustomError(provenance, "SubmitterNotActive");
         });
@@ -269,7 +272,7 @@ describe("AtsurProvenance", function () {
         it("reverts with empty eventType", async function () {
             await expect(
                 provenance.connect(committer).anchorBatch(
-                    merkleRoot, arweaveTxId, 5, submitterActorId, nonce, ""
+                    merkleRoot, arweaveTxId, 5, submitterActorId, salt, "", 0
                 )
             ).to.be.revertedWithCustomError(provenance, "EmptyEventType");
         });
@@ -277,7 +280,7 @@ describe("AtsurProvenance", function () {
         it("reverts with zero arweaveTxId", async function () {
             await expect(
                 provenance.connect(committer).anchorBatch(
-                    merkleRoot, ethers.ZeroHash, 5, submitterActorId, nonce, "E12_Production"
+                    merkleRoot, ethers.ZeroHash, 5, submitterActorId, salt, "E12_Production", 0
                 )
             ).to.be.revertedWithCustomError(provenance, "InvalidArweaveTxId");
         });
@@ -286,7 +289,7 @@ describe("AtsurProvenance", function () {
         it("reverts InvalidMerkleRoot for zero merkle root", async function () {
             await expect(
                 provenance.connect(committer).anchorBatch(
-                    ethers.ZeroHash, arweaveTxId, 5, submitterActorId, nonce, "E12_Production"
+                    ethers.ZeroHash, arweaveTxId, 5, submitterActorId, salt, "E12_Production", 0
                 )
             ).to.be.revertedWithCustomError(provenance, "InvalidMerkleRoot");
         });
@@ -295,10 +298,10 @@ describe("AtsurProvenance", function () {
         it("reverts BatchAlreadyExists when same nonce+submitter collide in same timestamp", async function () {
             const root1        = ethers.keccak256(ethers.toUtf8Bytes("root-dup-1"));
             const arweave1     = makeArweaveTxId("dup-1");
-            const sharedNonce  = ethers.keccak256(ethers.toUtf8Bytes("shared-nonce-collision"));
+            const sharedSalt   = ethers.keccak256(ethers.toUtf8Bytes("shared-nonce-collision"));
 
             const tx1      = await provenance.connect(committer).anchorBatch(
-                root1, arweave1, 5, submitterActorId, sharedNonce, "E12_Production"
+                root1, arweave1, 5, submitterActorId, sharedSalt, "E12_Production", 0
             );
             const receipt1 = await tx1.wait();
             const block1   = await ethers.provider.getBlock(receipt1.blockNumber);
@@ -311,9 +314,35 @@ describe("AtsurProvenance", function () {
 
             await expect(
                 provenance.connect(committer).anchorBatch(
-                    root2, arweave2, 5, submitterActorId, sharedNonce, "E12_Production"
+                    root2, arweave2, 5, submitterActorId, sharedSalt, "E12_Production", 1
                 )
             ).to.be.revertedWithCustomError(provenance, "BatchAlreadyExists");
+        });
+
+        // New: Task 2 replay-protection nonce
+        it("reverts InvalidNonce when nonce does not match getSubmitterNonce", async function () {
+            await expect(
+                provenance.connect(committer).anchorBatch(
+                    merkleRoot, arweaveTxId, 5, submitterActorId, salt, "E12_Production", 7
+                )
+            ).to.be.revertedWithCustomError(provenance, "InvalidNonce");
+        });
+
+        it("getSubmitterNonce increments only on a successful anchorBatch call", async function () {
+            expect(await provenance.getSubmitterNonce(committer.address)).to.equal(0);
+
+            await provenance.connect(committer).anchorBatch(
+                merkleRoot, arweaveTxId, 5, submitterActorId, salt, "E12_Production", 0
+            );
+            expect(await provenance.getSubmitterNonce(committer.address)).to.equal(1);
+
+            // A reverted call (stale nonce) must not advance the counter.
+            await expect(
+                provenance.connect(committer).anchorBatch(
+                    merkleRoot, arweaveTxId, 5, submitterActorId, salt, "E12_Production", 0
+                )
+            ).to.be.revertedWithCustomError(provenance, "InvalidNonce");
+            expect(await provenance.getSubmitterNonce(committer.address)).to.equal(1);
         });
     });
 
@@ -322,13 +351,14 @@ describe("AtsurProvenance", function () {
     // ─────────────────────────────────────────────
 
     async function anchorWithLeaves(leaves) {
-        const tree     = buildMerkleTree(leaves);
-        const root     = tree.getHexRoot();
-        const arweave  = makeArweaveTxId(`tx-${Date.now()}-${Math.random()}`);
-        const nonce    = ethers.keccak256(ethers.toUtf8Bytes(`nonce-${Date.now()}`));
+        const tree   = buildMerkleTree(leaves);
+        const root   = tree.getHexRoot();
+        const arweave = makeArweaveTxId(`tx-${Date.now()}-${Math.random()}`);
+        const salt   = ethers.keccak256(ethers.toUtf8Bytes(`nonce-${Date.now()}`));
+        const nonce  = await provenance.getSubmitterNonce(committer.address);
 
         const tx      = await provenance.connect(committer).anchorBatch(
-            root, arweave, leaves.length, submitterActorId, nonce, "E12_Production"
+            root, arweave, leaves.length, submitterActorId, salt, "E12_Production", nonce
         );
         const receipt = await tx.wait();
         const event   = receipt.logs.find(l => l.fragment?.name === "BatchAnchored");
@@ -690,11 +720,11 @@ describe("AtsurProvenance", function () {
 
             const root     = ethers.keccak256(ethers.toUtf8Bytes("root-paused"));
             const arweave  = makeArweaveTxId("tx-paused");
-            const nonce    = ethers.keccak256(ethers.toUtf8Bytes("nonce-paused"));
+            const salt     = ethers.keccak256(ethers.toUtf8Bytes("nonce-paused"));
 
             await expect(
                 provenance.connect(committer).anchorBatch(
-                    root, arweave, 1, submitterActorId, nonce, "E12_Production"
+                    root, arweave, 1, submitterActorId, salt, "E12_Production", 0
                 )
             ).to.be.revertedWithCustomError(provenance, "EnforcedPause");
         });

@@ -63,7 +63,7 @@ provenance-onchain/
 - **Node.js** 18+
 - **Foundry** (for Solidity tests and scripts)
 - **Hardhat** (already configured via `devDependencies`)
-- A supported EVM RPC endpoint (e.g. Lisk Sepolia, Polygon Mumbai) for live deployments.
+- A supported EVM RPC endpoint (e.g. Ethereum Sepolia, Polygon) for live deployments.
 
 ### Install toolchain and dependencies
 
@@ -131,14 +131,14 @@ For more detail, see `DEPLOYMENT.md`.
 
 ## Deploying to public networks
 
-Deployment flows and network-specific details are documented in `DEPLOYMENT.md` and `MULTISIG.md`. At a high level:
+Deployment flows and network-specific details are documented in `DEPLOYMENT.md`. At a high level:
 
 - **Testnets**
-  - Lisk Sepolia
-  - Polygon Mumbai
-- **Mainnets (planned)**
-  - Lisk Mainnet
-  - Polygon Mainnet
+  - Ethereum Sepolia (primary — used to rehearse the Safe + timelock flow before mainnet)
+  - Lisk Sepolia, Polygon Amoy (also configured)
+- **Mainnet**
+  - Polygon (primary deployment target)
+  - Lisk (configured, no longer a deployment target)
 
 The repo supports both:
 

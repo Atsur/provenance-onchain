@@ -31,19 +31,23 @@ maintained and kept in sync. Pick whichever fits your workflow — they perform 
 
 ## 2. Testnet deployment
 
-Testnets currently configured: **Lisk Sepolia** (chain ID 4202). `polygonMumbai` has been
-removed from `hardhat.config.js` since Polygon decommissioned it in 2024; use `polygonAmoy`
-(chain ID 80002) if you need a Polygon testnet.
+Primary testnet target: **Ethereum Sepolia** (chain ID 11155111) — used to rehearse the exact
+production flow (Safe + timelock) before the Polygon mainnet deploy.
+
+Also configured: **Lisk Sepolia** (chain ID 4202, kept for reference, no longer a deployment
+target) and **Polygon Amoy** (chain ID 80002, Polygon's testnet, if needed). `polygonMumbai` was
+removed from `hardhat.config.js` since Polygon decommissioned it in 2024.
 
 On testnets, `MULTISIG_ADDRESS` and `TIMELOCK_DELAY` are optional — but the `TimelockController`
 is **always** deployed automatically by `Deploy.s.sol` for any non-local network, testnets
 included, with a default 48h delay (172800s) unless you override `TIMELOCK_DELAY` (the script
-enforces a 24h/86400s floor on every non-local network).
+enforces a 24h/86400s floor on every non-local network). For a true rehearsal of production,
+set `MULTISIG_ADDRESS` to a real Safe deployed on Sepolia rather than leaving it unset.
 
 ### Hardhat path
 
 ```bash
-npx hardhat run scripts/deployAll.js --network liskSepolia
+npx hardhat run scripts/deployAll.js --network sepolia
 ```
 
 Optionally export `TIMELOCK_DELAY` first (e.g. `export TIMELOCK_DELAY=86400`) if you want
@@ -54,12 +58,13 @@ Hardhat script still treats this as opt-in, matching its existing behaviour.
 
 ```bash
 forge script scripts/Deploy.s.sol \
-  --rpc-url $LISK_SEPOLIA_RPC_URL \
+  --rpc-url $SEPOLIA_RPC_URL \
   --broadcast \
-  --verify \
-  --verifier blockscout \
-  --verifier-url https://sepolia-blockscout.lisk.com/api
+  --verify
 ```
+
+(Sepolia verification goes through Etherscan's standard V2 API via `ETHERSCAN_API_KEY` — no
+`--verifier`/`--verifier-url` flags needed, unlike Lisk's Blockscout-based explorer.)
 
 Both scripts print proxy addresses, implementation addresses, and (on non-local networks) the
 `TimelockController` address at the end. Copy `REGISTRY_ADDRESS` and `PROVENANCE_ADDRESS` into
@@ -69,9 +74,11 @@ your `.env`.
 
 ## 3. Mainnet deployment
 
-Mainnets configured: **Lisk** (chain ID 1135), **Polygon** (chain ID 137).
+Primary mainnet target: **Polygon** (chain ID 137). Lisk mainnet (chain ID 1135) remains
+configured and gated by the same mainnet guard, but is no longer the deployment target for this
+project.
 
-Both deploy scripts will **refuse to run against these chain IDs** unless
+Both deploy scripts will **refuse to run against either mainnet chain ID** unless
 `CONFIRM_MAINNET=I_UNDERSTAND_THIS_IS_MAINNET` is set in the environment. This is a deliberate
 speed bump — there is no other difference in code path between testnet and mainnet deploys.
 
@@ -86,15 +93,14 @@ Before running either command below:
 ### Hardhat path
 
 ```bash
-CONFIRM_MAINNET=I_UNDERSTAND_THIS_IS_MAINNET npx hardhat run scripts/deployAll.js --network lisk
-# or --network polygon
+CONFIRM_MAINNET=I_UNDERSTAND_THIS_IS_MAINNET npx hardhat run scripts/deployAll.js --network polygon
 ```
 
 ### Foundry path
 
 ```bash
 CONFIRM_MAINNET=I_UNDERSTAND_THIS_IS_MAINNET forge script scripts/Deploy.s.sol \
-  --rpc-url $LISK_RPC_URL \
+  --rpc-url $POLYGON_RPC_URL \
   --broadcast \
   --verify
 ```
@@ -135,8 +141,8 @@ const DEFAULT_ADMIN_ROLE = await registry.DEFAULT_ADMIN_ROLE();
       The deploy script already checks this before granting admin, but verify independently.
 - [ ] **Operator and pauser roles landed correctly**: `BATCH_COMMITTER_ROLE` / `OPERATOR_ROLE` on
       the operator hot wallet, `PAUSER_ROLE` on the pauser address — not on the deployer.
-- [ ] **Contracts are verified on the block explorer** (Blockscout for Lisk, Polygonscan for
-      Polygon) — `--verify` during deploy handles this; if it failed, run
+- [ ] **Contracts are verified on the block explorer** (Etherscan for Sepolia/Polygon, Blockscout
+      for Lisk) — `--verify` during deploy handles this; if it failed, run
       `npx hardhat verify --network <network> <implementation-address>` manually for each
       implementation contract (not the proxy).
 

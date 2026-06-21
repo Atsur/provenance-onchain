@@ -11,6 +11,7 @@
     "test:gas": "REPORT_GAS=true hardhat test",
     "node": "hardhat node",
     "deploy:local": "hardhat run scripts/deployLocal.js --network localhost",
+    "deploy:sepolia": "hardhat run scripts/deployAll.js --network sepolia",
     "deploy:lisk-sepolia": "hardhat run scripts/deployAll.js --network liskSepolia",
     "deploy:polygon": "hardhat run scripts/deployAll.js --network polygon",
     "verify": "hardhat verify",

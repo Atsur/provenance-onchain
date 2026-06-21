@@ -186,16 +186,18 @@ async function main() {
     const tree = new MerkleTree(leaves, keccak256, { sortPairs: true });
     const root = "0x" + tree.getRoot().toString("hex");
 
-    const arweaveTxId  = ethers.keccak256(ethers.toUtf8Bytes("arweave-local-seed-001"));
-    const nonce        = 1n;
+    const arweaveTxId    = ethers.keccak256(ethers.toUtf8Bytes("arweave-local-seed-001"));
+    const batchSalt      = 1n;
+    const submitterNonce = await provenance.getSubmitterNonce(operator.address);
 
     tx = await provenance.connect(operator).anchorBatch(
         root,
         arweaveTxId,
         2,
         ngaId,
-        ethers.zeroPadValue(ethers.toBeHex(nonce), 32),
-        "E12_Production"
+        ethers.zeroPadValue(ethers.toBeHex(batchSalt), 32),
+        "E12_Production",
+        submitterNonce
     );
     const receipt = await tx.wait();
 

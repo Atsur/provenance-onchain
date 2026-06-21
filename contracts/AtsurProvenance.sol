@@ -21,8 +21,12 @@ import "./AtsurActorRegistry.sol";
  * - All provenance events are CIDOC-CRM JSON-LD documents stored on Arweave.
  *   Only Merkle roots are anchored on-chain. arweaveTxId is the retrieval reference.
  *
- * - Batch ID = keccak256(abi.encodePacked(block.timestamp, submitterActorId, nonce)).
- *   Submitted nonce from backend ensures uniqueness even within the same block.
+ * - Batch ID = keccak256(abi.encodePacked(block.timestamp, submitterActorId, batchSalt)).
+ *   Submitted batchSalt from backend ensures uniqueness even within the same block.
+ *
+ * - anchorBatch() also takes a sequential per-submitter `nonce` (uint256), unrelated to
+ *   `batchSalt` above — see getSubmitterNonce(). This closes the replay edge case where a
+ *   compromised operator key resubmits old, otherwise-valid calldata under a new merkleRoot.
  *
  * - Batch submitters (BATCH_COMMITTER_ROLE) must be registered actors in AtsurActorRegistry.
  *   Their actorId is verified on every anchorBatch call.
@@ -121,21 +125,41 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
     uint256 public minBatchSize;
     uint256 public maxBatchSize;
 
-    /// @dev Storage gap — reserve 51 slots (was 50 + 1 removed _status slot) for future upgrades
-    uint256[51] private __gap;
+    /// @notice Per-submitter sequential nonce — replay protection for anchorBatch().
+    ///         Starts at 0 for every address; increments by 1 on each successful anchorBatch()
+    ///         call from that msg.sender. Read the next expected value via getSubmitterNonce().
+    mapping(address => uint256) private _submitterNonce;
+
+    /// @dev Storage gap — reserve 50 slots (was 51; one slot consumed by the new
+    ///      _submitterNonce mapping above, following this contract's established
+    ///      1-slot-per-mapping gap convention (see the usedMerkleRoots/usedArweaveTxIds and
+    ///      AtsurActorRegistry.revokedVerifiers precedents in FIXES.md).
+    uint256[50] private __gap;
 
     // ─────────────────────────────────────────────
     // EVENTS
     // ─────────────────────────────────────────────
 
-    /// @notice Emitted when a Merkle batch is anchored on-chain.
+    /**
+     * @notice Emitted when a Merkle batch is anchored on-chain.
+     * @dev Indexer-friendly by design: every field needed to reconstruct a batch's provenance
+     *      record is present here, so a subgraph never needs to fall back to a storage read.
+     *      Only batchId and merkleRoot are indexed (the two real filter keys) — eventType is a
+     *      string and can't be usefully indexed, and submitterActorId moved to non-indexed here
+     *      since institutional consumers read it for display, not for filtering. `submitter` is
+     *      msg.sender (not a caller-supplied parameter), so it can't be spoofed by a compromised
+     *      operator key.
+     */
     event BatchAnchored(
         bytes32 indexed batchId,
-        bytes32         merkleRoot,
+        bytes32 indexed merkleRoot,
         bytes32         arweaveTxId,
-        bytes32 indexed submitterActorId,
         uint256         eventCount,
-        uint256         timestamp
+        string          eventType,
+        address         submitter,
+        bytes32         submitterActorId,
+        uint256         nonce,
+        uint256         anchoredAt
     );
 
     /**
@@ -187,6 +211,7 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
     // ─────────────────────────────────────────────
 
     error InvalidBatchSize(uint256 eventCount, uint256 minSize, uint256 maxSize);
+    error InvalidNonce(uint256 provided, uint256 expected);
     error InvalidArweaveTxId(bytes32 txId);
     error InvalidMerkleRoot(bytes32 root);
     error DuplicateMerkleRoot(bytes32 merkleRoot);
@@ -275,17 +300,20 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
      * @param arweaveTxId       Arweave TX ID where full batch payload is stored (bytes32 form)
      * @param eventCount        Number of events in this batch
      * @param submitterActorId  actorId of the Atsur operator — verified in AtsurActorRegistry
-     * @param nonce             Random bytes32 to ensure batchId uniqueness within a block
+     * @param batchSalt         Random bytes32 to ensure batchId uniqueness within a block
      * @param eventType         Primary CIDOC class (e.g. "E12_Production", "E8_Acquisition")
-     * @return batchId          keccak256(abi.encodePacked(block.timestamp, submitterActorId, nonce))
+     * @param nonce             Sequential per-submitter replay-protection nonce — must equal
+     *                          getSubmitterNonce(msg.sender). Unrelated to batchSalt above.
+     * @return batchId          keccak256(abi.encodePacked(block.timestamp, submitterActorId, batchSalt))
      */
     function anchorBatch(
         bytes32         merkleRoot,
         bytes32         arweaveTxId,
         uint32          eventCount,
         bytes32         submitterActorId,
-        bytes32         nonce,
-        string calldata eventType
+        bytes32         batchSalt,
+        string calldata eventType,
+        uint256         nonce
     )
         external
         onlyRole(BATCH_COMMITTER_ROLE)
@@ -294,6 +322,7 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
         validArweaveTxId(arweaveTxId)
         returns (bytes32 batchId)
     {
+        if (nonce != _submitterNonce[msg.sender]) revert InvalidNonce(nonce, _submitterNonce[msg.sender]);
         if (bytes(eventType).length == 0) revert EmptyEventType();
         if (merkleRoot == bytes32(0)) revert InvalidMerkleRoot(merkleRoot);
         if (eventCount < minBatchSize || eventCount > maxBatchSize) {
@@ -310,8 +339,10 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
 
         _validateArweaveTxId(arweaveTxId);
 
-        batchId = keccak256(abi.encodePacked(block.timestamp, submitterActorId, nonce));
+        batchId = keccak256(abi.encodePacked(block.timestamp, submitterActorId, batchSalt));
         if (batches[batchId].exists) revert BatchAlreadyExists(batchId);
+
+        _submitterNonce[msg.sender]++;
 
         batches[batchId] = ProvenanceBatch({
             merkleRoot:       merkleRoot,
@@ -328,7 +359,22 @@ contract AtsurProvenance is UUPSUpgradeable, AccessControlUpgradeable, PausableU
         usedMerkleRoots[merkleRoot]   = true;
         usedArweaveTxIds[arweaveTxId] = true;
 
-        emit BatchAnchored(batchId, merkleRoot, arweaveTxId, submitterActorId, eventCount, block.timestamp);
+        emit BatchAnchored(
+            batchId,
+            merkleRoot,
+            arweaveTxId,
+            eventCount,
+            eventType,
+            msg.sender,
+            submitterActorId,
+            nonce,
+            block.timestamp
+        );
+    }
+
+    /// @notice Returns the nonce `submitter` must pass to their next anchorBatch() call.
+    function getSubmitterNonce(address submitter) external view returns (uint256) {
+        return _submitterNonce[submitter];
     }
 
     // ─────────────────────────────────────────────

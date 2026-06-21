@@ -36,6 +36,12 @@ module.exports = {
       chainId: 1337,
       loggingEnabled: false,
     },
+    sepolia: {
+      url: process.env.SEPOLIA_RPC_URL || "https://sepolia.drpc.org",
+      chainId: 11155111,
+      accounts: liveAccounts,
+      gasPrice: "auto",
+    },
     liskSepolia: {
       url: process.env.LISK_SEPOLIA_RPC_URL || "https://rpc.sepolia-api.lisk.com",
       chainId: 4202,
@@ -62,10 +68,14 @@ module.exports = {
     },
   },
   etherscan: {
+    // Etherscan's V2 API uses a single key across every chain it covers (including Sepolia
+    // and Polygon — Polygonscan keys were folded into this same system). Lisk's explorer is
+    // Blockscout, not Etherscan, so it keeps its own separate key below.
     apiKey: {
+      sepolia: process.env.ETHERSCAN_API_KEY || "",
+      polygonAmoy: process.env.ETHERSCAN_API_KEY || "",
+      polygon: process.env.ETHERSCAN_API_KEY || "",
       liskSepolia: process.env.LISK_SEPOLIA_API_KEY || "",
-      polygonAmoy: process.env.POLYGONSCAN_API_KEY || "",
-      polygon: process.env.POLYGONSCAN_API_KEY || "",
     },
     customChains: [
       {
